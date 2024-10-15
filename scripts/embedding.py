@@ -94,11 +94,15 @@ def adaptive_multi_level_embedding(image_path, watermark):
     # DWT multi livello
     current_image = image.copy()
     
+    # Lista per memorizzare i coefficienti watermarkati
+    watermarked_coeffs = []
+    
+    # Decomposizione a più livelli
     for level in range(levels):
         coeffs = pywt.dwt2(current_image, 'haar')
         LL, (LH, HL, HH) = coeffs
         
-        # maschera percettiva -> cerca cosa è?
+        # Maschera percettiva
         mask_LH = np.abs(LH) / np.max(np.abs(LH))
 
         # Embed in LH
@@ -106,6 +110,7 @@ def adaptive_multi_level_embedding(image_path, watermark):
 
         min_length = min(len(watermark), len(all_selected_locations))
         
+        # Inserimento del watermark
         for idx in range(min_length):
             loc = all_selected_locations[idx]
             mark_val = watermark[idx]
@@ -117,14 +122,16 @@ def adaptive_multi_level_embedding(image_path, watermark):
                     watermarked_LH[loc[0], loc[1]] *= (1 + (alpha * mark_val * mask_LH[loc[0], loc[1]]))
 
         watermarked_LH *= np.sign(LH)
-        coeffs_watermarked = (LL, (watermarked_LH, HL, HH))
         
-        # ricostruisco immagine per livello dopo
+        # Salvo i coefficienti watermarkati
+        watermarked_coeffs.append((LL, (watermarked_LH, HL, HH)))
+
+        # Aggiorno l'immagine corrente per il livello successivo
+        current_image = LL
+
+    # Ricostruzione dell'immagine dai coefficienti watermarkati
+    for level in reversed(range(levels)):
+        coeffs_watermarked = watermarked_coeffs[level]
         current_image = pywt.idwt2(coeffs_watermarked, 'haar')
 
     return current_image
-
-
-
-
-

@@ -23,28 +23,42 @@ def similarity(X,X_star):
     return s
 
 def detection(original_image, watermarked_image, attacked_image):
-    levels = 2  #same of embedding
+    """ Rileva la presenza del watermark confrontando l'immagine watermarkata e quella attaccata. """
+    levels=2
+
+    #dwt su watermarked e attacked
     watermarked_coeffs = pywt.wavedec2(watermarked_image, 'haar', level=levels)
     attacked_coeffs = pywt.wavedec2(attacked_image, 'haar', level=levels)
 
-    w_LL, w_LH, w_HH = watermarked_coeffs[-1]
-    a_LL, a_LH, a_HH = attacked_coeffs[-1]
+    similarity_scores = []
 
-    w_LH_flat = w_LH.flatten()
-    a_LH_flat = a_LH.flatten()
+    w_LL = watermarked_coeffs[0]
+    a_LL = attacked_coeffs[0]
 
-    #calculate similarity
-    sim_value = similarity(w_LH_flat, a_LH_flat)
+    #for every level
+    for level in range(1, levels + 1):
+        w_LH, w_HL, w_HH = watermarked_coeffs[level]
+        a_LH, a_HL, a_HH = attacked_coeffs[level]
+
+        w_LH_flat = w_LH.flatten()
+        a_LH_flat = a_LH.flatten()
+
+        #compute similarity for the level
+        sim_value = similarity(w_LH_flat, a_LH_flat)
+        similarity_scores.append(sim_value)
+
+    #average similarity
+    avg_similarity = np.mean(similarity_scores)
     
-    tau = 0.85  #from the ROC
+    tau = 0.85  #from ROC
 
-    #check if watermark present
-    if sim_value >= tau:
+    # check if watermark is present
+    if avg_similarity >= tau:
         output1 = 1  
     else:
-        output1 = 0  
+        output1 = 0 
 
-    # calculate WPSNR between watermarkd and attacked
+    # WPSNR between watermarked and attacked
     wpsnr_value = wpsnr(watermarked_image, attacked_image)
     output2 = wpsnr_value
 
