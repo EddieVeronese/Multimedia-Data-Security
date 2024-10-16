@@ -1,7 +1,11 @@
-import numpy as np
 import pywt
-import cv2
+import os
+from scipy.fft import dct, idct
+import numpy as np
 import matplotlib.pyplot as plt
+import cv2
+from scipy.signal import convolve2d
+from math import sqrt
 
 #trova zone con texture
 def compute_texture_map(image):
@@ -21,117 +25,133 @@ def compute_bright_dark_areas(image):
     bright_areas = np.argwhere(image >= bright_threshold)
     return dark_areas, bright_areas
 
+#trova contorni
 def compute_contours(image):
     """ Calcola i contorni dell'immagine utilizzando il filtro di Canny. """
     edges = cv2.Canny(image, 200, 600)  #aumenta valori per più restrittivo -> secondo deve essere 3x il primo
     return np.argwhere(edges > 0) 
 
-def adaptive_multi_level_embedding(image_path, watermark):
-    """ Inserisce un watermark nell'immagine utilizzando DWT in aree ad alta texture, contorni e aree scure/chiare. """
-    alpha = 0.3 #più aumenti più embed, ma meno qualità
-    v = 'multiplicative' #oppure additive
-    levels=2 #più livelli metti più embed, ma meno qualità
+
+def embedding(image_path, mark):
+
+    levels=2 #più aumenta meno qualità
+    alpha=0.2 #più aumenta meno qualità
+    v='multiplicative'
+    texture_threshold=0.3 #per soglia texture
 
     image = cv2.imread(image_path, 0)
-
-    # texture map
+    
+    #trova zone adatte
     texture_map = compute_texture_map(image)
-    texture_threshold = np.percentile(texture_map, 90)  # aumenta per più restrittivo -> max 100
-    high_texture_locations = np.argwhere(texture_map >= texture_threshold)
-
-    # area chiaro scuro
     dark_areas, bright_areas = compute_bright_dark_areas(image)
+    contour_areas = compute_contours(image)
+    max_texture = np.max(texture_map)
+    texture_mask = np.zeros_like(image)
+    texture_mask[texture_map >= (texture_threshold * max_texture)] = 255
+    texture_areas = np.argwhere(texture_mask == 255)
 
-    # area contorni
-    contour_locations = compute_contours(image)
+    #unisce zone adatte (puoi cambiarle)
+    significant_areas = set(map(tuple, np.vstack((bright_areas, dark_areas, contour_areas, texture_areas))))
 
-    #unisci tutte le aree trovato
-    all_selected_locations = np.vstack((high_texture_locations, dark_areas, bright_areas, contour_locations)) #togli quelle che vuoi per fare prove
+    coeffs2 = pywt.dwt2(image, 'haar')
+    LL, (LH, HL, HH) = coeffs2
 
 
-    """decommenta per vedere le zone trovare dove applicare il watermark (esegui solo su un'immagine)"""
-    """
-    def visualize_locations(image, locations, title, color):
-        image_color = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        for loc in locations:
-            y, x = loc  
-            cv2.circle(image_color, (x, y), radius=3, color=color, thickness=-1) 
-        return image_color
+    #ripete per ogni livello
+    for level in range(levels):
+        print(f"Embedding at level {level + 1}")
 
-    image_high_texture = visualize_locations(image, high_texture_locations, "High Texture Areas", (0, 255, 0))
-    image_dark_areas = visualize_locations(image, dark_areas, "Dark Areas", (255, 0, 0))
-    image_bright_areas = visualize_locations(image, bright_areas, "Bright Areas", (0, 0, 255))
-    image_contours = visualize_locations(image, contour_locations, "Contour Areas", (255, 255, 0))
+        sign_LH = np.sign(LH)
+        abs_LH = abs(LH)
+        locations_LH = np.argsort(-abs_LH, axis=None)
+        rows_LH = LH.shape[0]
+        locations_LH = [(val // rows_LH, val % rows_LH) for val in locations_LH]
 
-    plt.figure(figsize=(12, 12))
+        # mette watermark ma solo in aree specifiche
+        watermarked_LH = abs_LH.copy()
+        mark_idx = 0 
+        for loc in locations_LH[1:]:
+            if tuple(loc) in significant_areas:
+                mark_val = mark[mark_idx % len(mark)]
+                if v == 'additive':
+                    watermarked_LH[loc] += (alpha * mark_val)
+                elif v == 'multiplicative':
+                    watermarked_LH[loc] *= 1 + (alpha * mark_val)
+                mark_idx += 1
 
-    plt.subplot(2, 2, 1)
-    plt.imshow(image_high_texture)
-    plt.title("High Texture Areas")
+        watermarked_LH *= sign_LH
+    
+        LL = pywt.idwt2((LL, (watermarked_LH, HL, HH)), 'haar')
+
+        # aggiorna livello
+        if level < levels - 1:
+            LL, (LH, HL, HH) = pywt.dwt2(LL, 'haar')
+
+    watermarked_image = LL
+    return watermarked_image
+
+
+
+def plot_identified_areas(image):
+   
+    texture_threshold=0.3
+
+    texture_map = compute_texture_map(image)
+    dark_areas, bright_areas = compute_bright_dark_areas(image)
+    contour_areas = compute_contours(image)
+
+    dark_mask = np.zeros_like(image)
+    bright_mask = np.zeros_like(image)
+    contour_mask = np.zeros_like(image)
+
+    dark_mask[tuple(dark_areas.T)] = 255
+    bright_mask[tuple(bright_areas.T)] = 255
+    contour_mask[tuple(contour_areas.T)] = 255
+
+    max_texture = np.max(texture_map)
+    texture_mask = np.zeros_like(image)
+    texture_mask[texture_map >= (texture_threshold * max_texture)] = 255
+    texture_areas = np.argwhere(texture_mask == 255)
+
+    significant_areas = set(map(tuple, np.vstack((texture_areas, bright_areas, dark_areas, contour_areas))))
+
+    significant_mask = np.zeros_like(image)
+    for (i, j) in significant_areas:
+        significant_mask[i, j] = 255
+
+    plt.figure(figsize=(12, 8))
+
+    plt.subplot(2, 3, 1)
+    plt.imshow(image, cmap='gray')
+    plt.title('Original Image')
     plt.axis('off')
 
-    plt.subplot(2, 2, 2)
-    plt.imshow(image_dark_areas)
-    plt.title("Dark Areas")
+    plt.subplot(2, 3, 2)
+    plt.imshow(texture_mask, cmap='gray')
+    plt.title(f'Textured Areas (Threshold={texture_threshold})')
     plt.axis('off')
 
-    plt.subplot(2, 2, 3)
-    plt.imshow(image_bright_areas)
-    plt.title("Bright Areas")
+    plt.subplot(2, 3, 3)
+    plt.imshow(contour_mask, cmap='gray')
+    plt.title('Contours')
     plt.axis('off')
 
-    plt.subplot(2, 2, 4)
-    plt.imshow(image_contours)
-    plt.title("Contour Areas")
+    plt.subplot(2, 3, 4)
+    plt.imshow(dark_mask, cmap='gray')
+    plt.title('Dark Areas')
+    plt.axis('off')
+
+    plt.subplot(2, 3, 5)
+    plt.imshow(bright_mask, cmap='gray')
+    plt.title('Bright Areas')
+    plt.axis('off')
+
+    
+
+    plt.subplot(2, 3, 6)
+    plt.imshow(significant_mask, cmap='gray')
+    plt.title('Significant Areas (Union of all)')
     plt.axis('off')
 
     plt.tight_layout()
-    plt.show() 
-    """
-
-    """finisce qui"""
-
-    # DWT multi livello
-    current_image = image.copy()
-    
-    # Lista per memorizzare i coefficienti watermarkati
-    watermarked_coeffs = []
-    
-    # Decomposizione a più livelli
-    for level in range(levels):
-        coeffs = pywt.dwt2(current_image, 'haar')
-        LL, (LH, HL, HH) = coeffs
-        
-        # Maschera percettiva
-        mask_LH = np.abs(LH) / np.max(np.abs(LH))
-
-        # Embed in LH
-        watermarked_LH = np.abs(LH).copy()
-
-        min_length = min(len(watermark), len(all_selected_locations))
-        
-        # Inserimento del watermark
-        for idx in range(min_length):
-            loc = all_selected_locations[idx]
-            mark_val = watermark[idx]
-            
-            if loc[0] < LH.shape[0] and loc[1] < LH.shape[1]:
-                if v == 'additive':
-                    watermarked_LH[loc[0], loc[1]] += (alpha * mark_val * mask_LH[loc[0], loc[1]])
-                elif v == 'multiplicative':
-                    watermarked_LH[loc[0], loc[1]] *= (1 + (alpha * mark_val * mask_LH[loc[0], loc[1]]))
-
-        watermarked_LH *= np.sign(LH)
-        
-        # Salvo i coefficienti watermarkati
-        watermarked_coeffs.append((LL, (watermarked_LH, HL, HH)))
-
-        # Aggiorno l'immagine corrente per il livello successivo
-        current_image = LL
-
-    # Ricostruzione dell'immagine dai coefficienti watermarkati
-    for level in reversed(range(levels)):
-        coeffs_watermarked = watermarked_coeffs[level]
-        current_image = pywt.idwt2(coeffs_watermarked, 'haar')
-
-    return current_image
+    plt.show()
