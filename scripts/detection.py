@@ -1,9 +1,40 @@
-import numpy as np
-import cv2
 import pywt
+import os
+from scipy.fft import dct, idct
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2
 from scipy.signal import convolve2d
 from math import sqrt
-from skimage.metrics import peak_signal_noise_ratio as psnr
+
+#trova zone con texture
+def compute_texture_map(image):
+    sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3) 
+    sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+    magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
+    return magnitude
+
+#trova zone molto chiare o molto scure
+def compute_bright_dark_areas(image):
+    dark_factor=0.6 #diminuisci per più restrittivo su scuro
+    bright_factor=1.4 #auemnta per più restrittivo su chiaro
+    threshold = np.mean(image)
+    dark_threshold=threshold*dark_factor
+    bright_threshold=threshold*bright_factor
+    dark_areas = np.argwhere(image < dark_threshold)
+    bright_areas = np.argwhere(image >= bright_threshold)
+    return dark_areas, bright_areas
+
+#trova contorni
+def compute_contours(image):
+    """ Calcola i contorni dell'immagine utilizzando il filtro di Canny. """
+    edges = cv2.Canny(image, 200, 600)  #aumenta valori per più restrittivo -> secondo deve essere 3x il primo
+    return np.argwhere(edges > 0) 
+
+def similarity(X,X_star):
+    #Computes the similarity measure between the original and the new watermarks.
+    s = np.sum(np.multiply(X, X_star)) / (np.sqrt(np.sum(np.multiply(X, X))) * np.sqrt(np.sum(np.multiply(X_star, X_star))))
+    return s
 
 def wpsnr(img1, img2):
   img1 = np.float32(img1)/255.0
@@ -17,50 +48,82 @@ def wpsnr(img1, img2):
   decibels = 20.0*np.log10(1.0/sqrt(np.mean(np.mean(ew**2))))
   return decibels
 
-def similarity(X,X_star):
-    #Computes the similarity measure between the original and the new watermarks.
-    s = np.sum(np.multiply(X, X_star)) / (np.sqrt(np.sum(np.multiply(X, X))) * np.sqrt(np.sum(np.multiply(X_star, X_star))))
-    return s
 
-def detection(original_image, watermarked_image, attacked_image):
-    """ Rileva la presenza del watermark confrontando l'immagine watermarkata e quella attaccata. """
+
+def extract_watermark(original_image, test_image):
+    # DWT dell'immagine originale
     levels=2
+    alpha=0.2
+    v='multiplicative'
+    texture_threshold=0.3
 
-    #dwt su watermarked e attacked
-    watermarked_coeffs = pywt.wavedec2(watermarked_image, 'haar', level=levels)
-    attacked_coeffs = pywt.wavedec2(attacked_image, 'haar', level=levels)
+    coeffs2 = pywt.dwt2(original_image, 'haar')
+    LL, (LH, HL, HH) = coeffs2
 
-    similarity_scores = []
+    # Calcolo delle aree significative
+    texture_map = compute_texture_map(original_image)
+    dark_areas, bright_areas = compute_bright_dark_areas(original_image)
+    contour_areas = compute_contours(original_image)
+    max_texture = np.max(texture_map)
+    texture_mask = np.zeros_like(original_image)
+    texture_mask[texture_map >= (texture_threshold * max_texture)] = 255  # Soglia texture
+    texture_areas = np.argwhere(texture_mask == 255)
+    significant_areas = set(map(tuple, np.vstack((bright_areas, dark_areas, contour_areas, texture_areas))))
 
-    w_LL = watermarked_coeffs[0]
-    a_LL = attacked_coeffs[0]
+    # DWT dell'immagine di test
+    test_coeffs2 = pywt.dwt2(test_image, 'haar')
+    LL_test, (LH_test, HL_test, HH_test) = test_coeffs2
 
-    #for every level
-    for level in range(1, levels + 1):
-        w_LH, w_HL, w_HH = watermarked_coeffs[level]
-        a_LH, a_HL, a_HH = attacked_coeffs[level]
-
-        w_LH_flat = w_LH.flatten()
-        a_LH_flat = a_LH.flatten()
-
-        #compute similarity for the level
-        sim_value = similarity(w_LH_flat, a_LH_flat)
-        similarity_scores.append(sim_value)
-
-    #average similarity
-    avg_similarity = np.mean(similarity_scores)
+    # Estrarre watermark confrontando LH dell'immagine originale e quella di test
+    extracted_mark = []
     
-    tau = 0.85  #from ROC
+    for level in range(levels):
+        sign_LH_test = np.sign(LH_test)
+        abs_LH_test = abs(LH_test)
+        locations_LH_test = np.argsort(-abs_LH_test, axis=None)
+        rows_LH_test = LH_test.shape[0]
+        locations_LH_test = [(val // rows_LH_test, val % rows_LH_test) for val in locations_LH_test]
+        
+        for loc in locations_LH_test[1:]:
+            if tuple(loc) in significant_areas:
+                if v == 'additive':
+                    extracted_val = (LH_test[loc] - LH[loc]) / alpha
+                elif v == 'multiplicative':
+                    extracted_val = (LH_test[loc] / LH[loc] - 1) / alpha
+                extracted_mark.append(extracted_val)
 
-    # check if watermark is present
-    if avg_similarity >= tau:
+        # Aggiorna DWT per livello successivo
+        if level < levels - 1:
+            LL, (LH, HL, HH) = pywt.dwt2(LL, 'haar')
+            LL_test, (LH_test, HL_test, HH_test) = pywt.dwt2(LL_test, 'haar')
+
+    extracted_mark = np.round(extracted_mark).astype(int)
+    return extracted_mark
+
+
+
+def detection(original_image, watermarked_image, attacked_image):  
+
+    # estraggo watermark da watermarked_image
+    w_extracted = extract_watermark(original_image, watermarked_image)
+    
+    # estraggo watermark da attacked_image
+    w_attacked = extract_watermark(original_image, attacked_image)
+    
+    # calcolo similarità
+    sim = similarity(w_extracted, w_attacked)
+    
+    # calcolo WPSNR tra watermarked e attacked
+    wpsnr_value = wpsnr(watermarked_image, attacked_image)
+    
+    Tau = 0.75  # da ROC
+
+    # controllo se watermark presente
+    if sim >= Tau:
         output1 = 1  
     else:
         output1 = 0 
 
-    # WPSNR between watermarked and attacked
-    wpsnr_value = wpsnr(watermarked_image, attacked_image)
     output2 = wpsnr_value
-
+    
     return output1, output2
-
