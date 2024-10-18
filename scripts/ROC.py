@@ -2,9 +2,87 @@ import os
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import roc_curve
 from scipy.fft import dct, idct
 import random
+import glob
+import numpy as np
+import cv2
+from sklearn.metrics import roc_curve
+import matplotlib.pyplot as plt
+
+# Funzione per calcolare la similarità normalizzata
+def similarity(X, X_star):
+    # Calcola la somiglianza normalizzata tra il watermark originale e quello estratto
+    s = np.sum(np.multiply(X, X_star)) / (np.sqrt(np.sum(np.multiply(X, X))) * np.sqrt(np.sum(np.multiply(X_star, X_star))))
+    return s
+
+
+
+# Embedding function 
+def embedding(input1, input2):
+    # open image
+    #image = cv2.imread(input1, cv2.IMREAD_GRAYSCALE)
+    image = input1
+
+    if image is None:
+        raise ValueError(f"Immagine non trovata: {input1}")
+
+    # open watermark
+    watermark = np.load(input2)
+    if watermark.shape != image.shape:
+        watermark = cv2.resize(watermark, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+    # apply dct
+    dct_image = dct(dct(image, axis=0, norm='ortho'), axis=1, norm='ortho')
+
+    dct_abs = np.abs(dct_image)
+    locations = np.argsort(-dct_abs, axis=None)
+    rows, cols = dct_image.shape
+    locations = [(val // cols, val % cols) for val in locations]
+
+    watermarked_dct = dct_image.copy()
+    alpha = 0.2
+
+    # insert watermark
+    for i, (loc, mark_val) in enumerate(zip(locations, watermark.flatten())):
+        watermarked_dct[loc] *= (1 + alpha * mark_val)
+
+    # apply inverse DCT
+    watermarked_image = idct(idct(watermarked_dct, axis=1, norm='ortho'), axis=0, norm='ortho')
+    output1 = np.uint8(np.clip(watermarked_image, 0, 255))
+
+    return output1
+
+
+
+
+def detection(input_image, watermarked_image, alpha, watermark_size):
+    # Carica l'immagine originale e quella con watermark
+    original_image = cv2.imread(input_image, cv2.IMREAD_GRAYSCALE)
+    if original_image is None:
+        raise ValueError(f"Immagine non trovata: {input_image}")
+    
+    # Calcola la DCT dell'immagine originale
+    dct_original = dct(dct(original_image, axis=0, norm='ortho'), axis=1, norm='ortho')
+    
+    # Calcola la DCT dell'immagine watermarked
+    dct_watermarked = dct(dct(watermarked_image, norm='ortho'), axis=1, norm='ortho')
+
+    # Trova i coefficienti DCT più significativi nell'immagine originale
+    dct_abs = np.abs(dct_original)
+    locations = np.argsort(-dct_abs, axis=None)
+    rows, cols = dct_original.shape
+    locations = [(val // cols, val % cols) for val in locations]
+
+    # Estrai il watermark dall'immagine watermarked
+    extracted_watermark = np.zeros(watermark_size, dtype=np.float64)
+
+    # Recupera il watermark dai coefficienti DCT più significativi
+    for i, loc in enumerate(locations[:watermark_size]):
+        extracted_watermark[i] = (dct_watermarked[loc] - dct_original[loc]) / (alpha * dct_original[loc])
+
+    return extracted_watermark
 
 random.seed(3)
 def awgn(img, std, seed):
@@ -53,9 +131,11 @@ def jpeg_compression(img, QF):
 
   return attacked
 
-# Funzioni di attacco (già definite)
+
+# Funzione per eseguire attacchi casuali
 def random_attack(img):
-    i = random.randint(1,7)
+    # Simula un attacco casuale sull'immagine
+    i = random.randint(1, 7)
     if i == 1:
         attacked = awgn(img, 3., 123)
     elif i == 2:
@@ -68,127 +148,82 @@ def random_attack(img):
         attacked = resizing(img, 0.8)
     elif i == 6:
         attacked = jpeg_compression(img, 75)
-    else:
-        attacked = img
+    elif i == 7:
+        attacked = img  # Nessun attacco
     return attacked
 
-from scipy.fft import dct, idct
+# Funzione principale per stimare la soglia
+def compute_similarity_threshold( num_images=101, attack_func=random_attack):
+    mark_size = 1024
+    alpha = 0.1
+    v = 'multiplicative'
+    np.random.seed(seed=124)
 
-def embedding(image, mark_size, alpha, v='multiplicative'):
-    # Calcola la trasformata DCT bidimensionale dell'immagine
-    ori_dct = dct(dct(image, axis=0, norm='ortho'), axis=1, norm='ortho')
-
-    # Ottiene i coefficienti più significativi
-    sign = np.sign(ori_dct)
-    ori_dct = np.abs(ori_dct)
-    locations = np.argsort(-ori_dct, axis=None)  # Ordine decrescente dei valori DCT
-    rows = image.shape[0]
-    locations = [(val // rows, val % rows) for val in locations]  # Coordinate dei coefficienti
-
-    # Carica il watermark
-    mark = np.random.uniform(0.0, 1.0, mark_size)
-    mark = np.uint8(np.rint(mark))
-
-    # Embedding del watermark nei coefficienti DCT
-    watermarked_dct = ori_dct.copy()
-    for idx, (loc, mark_val) in enumerate(zip(locations[1:], mark)):
-        if v == 'additive':
-            watermarked_dct[loc] += (alpha * mark_val)
-        elif v == 'multiplicative':
-            watermarked_dct[loc] *= 1 + (alpha * mark_val)
-
-    # Ripristina il segno e ritorna all'immagine spaziale
-    watermarked_dct *= sign
-    watermarked = np.uint8(idct(idct(watermarked_dct, axis=1, norm='ortho'), axis=0, norm='ortho'))
-
-    return mark, watermarked
-
-
-def detection(image, watermarked, alpha, mark_size, v='multiplicative'):
-    # Calcola la DCT dell'immagine originale e di quella watermarked
-    ori_dct = dct(dct(image, axis=0, norm='ortho'), axis=1, norm='ortho')
-    wat_dct = dct(dct(watermarked, axis=0, norm='ortho'), axis=1, norm='ortho')
-
-    # Ordina i coefficienti per importanza percettiva
-    ori_dct = np.abs(ori_dct)
-    wat_dct = np.abs(wat_dct)
-    locations = np.argsort(-ori_dct, axis=None)  # Ordine decrescente dei valori DCT
-    rows = image.shape[0]
-    locations = [(val // rows, val % rows) for val in locations]
-
-    # Estrarre il watermark
-    w_extracted = np.zeros(mark_size, dtype=np.float64)
-    for idx, loc in enumerate(locations[1:mark_size + 1]):
-        if v == 'additive':
-            w_extracted[idx] = (wat_dct[loc] - ori_dct[loc]) / alpha
-        elif v == 'multiplicative':
-            w_extracted[idx] = (wat_dct[loc] - ori_dct[loc]) / (alpha * ori_dct[loc])
-
-    return w_extracted
-
-
-def similarity(X, X_star):
-    # Calcola la similitudine tra due watermark
-    s = np.sum(np.multiply(X, X_star)) / np.sqrt(np.sum(np.multiply(X_star, X_star)))
-    return s
-
-
-def calculate_threshold(images_folder, mark_file, mark_size=1024, alpha=0.1, v='multiplicative'):
-    np.random.seed(124)  # Seed per riproducibilità
-
-    # Carico il watermark salvato
-    mark = np.load(mark_file)
-
-    # Array per punteggi (scores) e etichette (labels)
+    # Inizializza array per i punteggi e le etichette
     scores = []
     labels = []
 
-    # Leggo tutte le immagini dalla cartella
-    image_files = [os.path.join(images_folder, f) for f in os.listdir(images_folder) if f.endswith('.bmp')]
+    # Elenca i file BMP dalla cartella
+    images = sorted(glob.glob('Multimedia-Data-Security/sample_images/*.bmp'))
+    print(images)
+    # Loop su ciascuna immagine
+    for img_path in images:
+        image = cv2.imread(img_path, 0)
+        
+        # Incorporare Watermark
+        watermarked = embedding(image, 'mark.npy')
 
-    # Embedding del watermark in ciascuna immagine
-    for img_file in image_files:
-        img = cv2.imread(img_file, 0)  # Legge l'immagine in scala di grigi
-
-        # Applica l'embedding del watermark all'immagine
-        _, watermarked_img = embedding(img, mark_size, alpha, v)
-
-        # Ciclo per attaccare le immagini e calcolare la soglia
-        for _ in range(10):  # Attacca ogni immagine 10 volte
-            attacked_img = random_attack(watermarked_img)
-            extracted_attacked = detection(img, attacked_img, alpha, mark_size, v)
-            extracted_original = detection(img, watermarked_img, alpha, mark_size, v)
-
-            # Similitudine tra watermark estratto e watermark originale (Ipotesi vera)
-            scores.append(similarity(mark, extracted_attacked))
+        sample = 0
+        while sample < 10:
+            # Genera un watermark casuale (H0)
+            fakemark = np.random.uniform(0.0, 1.0, mark_size)
+            fakemark = np.uint8(np.rint(fakemark))
+            
+            # Applica un attacco casuale all'immagine con watermark
+            res_att = random_attack(watermarked)
+            
+            # Estrai il watermark attaccato e l'originale
+            wat_attacked = detection(img_path, res_att, alpha, mark_size)
+            wat_extracted = detection(img_path, watermarked, alpha, mark_size)
+            
+            # Calcola la similarità H1 (watermark estratto vs attaccato)
+            scores.append(similarity(wat_extracted, wat_attacked))
             labels.append(1)
-
-            # Genera un watermark casuale (Ipotesi falsa)
-            fake_mark = np.random.uniform(0.0, 1.0, mark_size)
-            fake_mark = np.uint8(np.rint(fake_mark))
-            scores.append(similarity(fake_mark, extracted_attacked))
+            
+            # Calcola la similarità H0 (fake watermark vs attaccato)
+            scores.append(similarity(fakemark, wat_attacked))
             labels.append(0)
 
-    # Calcolo della ROC e della soglia ottimale τ
-    fpr, tpr, thresholds = roc_curve(np.asarray(labels), np.asarray(scores), drop_intermediate=False)
-    roc_auc = auc(fpr, tpr)
+            sample += 1
 
-    # Selezionare la soglia che corrisponde a un FPR ∈ [0, 0.1]
-    optimal_idx = np.where((fpr <= 0.1))[0][-1]
-    tau_optimal = thresholds[optimal_idx]
+    # Stampa i risultati
+    print('Array dei punteggi (scores): ', scores)
+    print('Array delle etichette (labels): ', labels)
 
-    # Visualizzazione della curva ROC
-    plt.figure()
-    lw = 2
-    plt.plot(fpr, tpr, color='darkorange', lw=lw, label='AUC = %0.2f' % roc_auc)
-    plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
-    plt.xlim([-0.01, 1.0])
-    plt.ylim([0.0, 1.05])
+    # Calcola la curva ROC
+    fpr, tpr, thresholds = roc_curve(labels, scores)
+
+    # Scegli la soglia ottimale (τ) dove FPR ∈ [0, 0.1]
+    fpr_limit = 0.1
+    valid_thresholds = thresholds[fpr <= fpr_limit]
+    best_threshold = valid_thresholds[-1]
+    print('Miglior soglia τ per FPR ∈ [0, 0.1]:', best_threshold)
+
+    # Salva la curva ROC
+    plt.plot(fpr, tpr, label='Curva ROC')
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
     plt.title('Curva ROC')
     plt.legend(loc="lower right")
+    plt.savefig('roc_curve.png')
     plt.show()
+    # Path alla cartella con immagini BMP
 
-    return tau_optimal
 
+
+
+# Calcola la soglia di similarità (τ)
+best_tau = compute_similarity_threshold()
+
+# Stampa la soglia per uso futuro
+print(best_tau)
