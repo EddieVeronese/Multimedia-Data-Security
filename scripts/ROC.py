@@ -2,160 +2,258 @@ import os
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve
-from scipy.fft import dct, idct
+from sklearn.metrics import roc_curve, auc
 import random
 import glob
-import numpy as np
-import cv2
-from sklearn.metrics import roc_curve
-import matplotlib.pyplot as plt
+import pywt
+from scipy.ndimage import gaussian_filter
+
+# Funzione per calcolare la mappa delle texture
+def compute_texture_map(image):
+    sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3) 
+    sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+    magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
+    return magnitude
+
+# Funzione per trovare le aree scure e chiare
+def compute_bright_dark_areas(image):
+    dark_factor = 0.6
+    bright_factor = 1.4
+    threshold = np.mean(image)
+    dark_threshold = threshold * dark_factor
+    bright_threshold = threshold * bright_factor
+    dark_areas = np.argwhere(image < dark_threshold)
+    bright_areas = np.argwhere(image >= bright_threshold)
+    return dark_areas, bright_areas
+
+# Funzione per calcolare i contorni
+def compute_contours(image):
+    # Assicuriamoci che l'immagine sia di tipo uint8
+    if image.dtype != np.uint8:
+        image_uint8 = np.uint8(np.clip(image, 0, 255))
+    else:
+        image_uint8 = image
+    edges = cv2.Canny(image_uint8, 200, 600)
+    return np.argwhere(edges > 0)
+
+# Funzione di embedding aggiornata
+def embedding(image, mark):
+    levels = 2  # Più aumenta, meno qualità
+    alpha = 0.2  # Più aumenta, meno qualità
+    v = 'multiplicative'
+    texture_threshold = 0.3  # Soglia per la texture
+
+    # Assicurati che l'immagine sia in scala di grigi e di tipo uint8
+    if len(image.shape) == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    image = np.uint8(image)
+    
+    # Trova le zone significative
+    texture_map = compute_texture_map(image)
+    dark_areas, bright_areas = compute_bright_dark_areas(image)
+    contour_areas = compute_contours(image)
+    max_texture = np.max(texture_map)
+    texture_mask = np.zeros_like(image)
+    texture_mask[texture_map >= (texture_threshold * max_texture)] = 255
+    texture_areas = np.argwhere(texture_mask == 255)
+
+    # Unisce le zone significative
+    significant_areas = set(map(tuple, np.vstack((bright_areas, dark_areas, contour_areas, texture_areas))))
+
+    # Esegue la DWT sull'immagine
+    coeffs2 = pywt.dwt2(image, 'haar')
+    LL, (LH, HL, HH) = coeffs2
+
+    # Inizializza il contatore per i bit incorporati
+    num_bits_embedded = 0
+
+    # Ripete per ogni livello
+    for level in range(levels):
+        print(f"Embedding at level {level + 1}")
+
+        sign_LH = np.sign(LH)
+        abs_LH = np.abs(LH)
+        locations_LH = np.argsort(-abs_LH, axis=None)
+        rows_LH, cols_LH = LH.shape
+        locations_LH = [(val // cols_LH, val % cols_LH) for val in locations_LH]
+
+        # Inserisce il watermark solo nelle aree significative
+        watermarked_LH = abs_LH.copy()
+        mark_idx = 0 
+        for loc in locations_LH:
+            # Ridimensiona le coordinate per le aree significative
+            scale_factor = 2 ** (level + 1)
+            img_i, img_j = loc[0] * scale_factor, loc[1] * scale_factor
+            if (img_i, img_j) in significant_areas:
+                if mark_idx >= len(mark):
+                    break
+                mark_val = mark[mark_idx % len(mark)]
+                if v == 'additive':
+                    watermarked_LH[loc] += (alpha * mark_val)
+                elif v == 'multiplicative':
+                    watermarked_LH[loc] *= 1 + (alpha * mark_val)
+                mark_idx += 1
+                num_bits_embedded += 1
+
+        watermarked_LH *= sign_LH
+
+        # Ricostruisce LL usando l'IDWT
+        LL = pywt.idwt2((LL, (watermarked_LH, HL, HH)), 'haar')
+
+        # Aggiorna per il prossimo livello
+        if level < levels - 1:
+            coeffs2 = pywt.dwt2(LL, 'haar')
+            LL, (LH, HL, HH) = coeffs2
+
+    watermarked_image = np.uint8(np.clip(LL, 0, 255))
+    return watermarked_image, num_bits_embedded
+
+# Funzione di detection aggiornata
+def detection(original_image, watermarked_image, num_bits_embedded, levels=2, alpha=0.2, texture_threshold=0.3, v='multiplicative'):
+    # Assicuriamoci che le immagini siano in scala di grigi e di tipo float32
+    if len(original_image.shape) == 3:
+        original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
+    original_image = np.float32(original_image)
+
+    if len(watermarked_image.shape) == 3:
+        watermarked_image = cv2.cvtColor(watermarked_image, cv2.COLOR_BGR2GRAY)
+    watermarked_image = np.float32(watermarked_image)
+
+    # Identifica le aree significative nell'immagine originale
+    texture_map = compute_texture_map(original_image)
+    dark_areas, bright_areas = compute_bright_dark_areas(original_image)
+    contour_areas = compute_contours(original_image)
+
+    max_texture = np.max(texture_map)
+    texture_mask = np.zeros_like(original_image)
+    texture_mask[texture_map >= (texture_threshold * max_texture)] = 255
+    texture_areas = np.argwhere(texture_mask == 255)
+
+    significant_areas = set(map(tuple, np.vstack((bright_areas, dark_areas, contour_areas, texture_areas))))
+
+    # Esegue la DWT
+    coeffs_image = []
+    coeffs_watermarked = []
+
+    current_image = original_image.copy()
+    current_watermarked = watermarked_image.copy()
+
+    for level in range(levels):
+        coeffs_i = pywt.dwt2(current_image, 'haar')
+        coeffs_w = pywt.dwt2(current_watermarked, 'haar')
+
+        coeffs_image.append(coeffs_i)
+        coeffs_watermarked.append(coeffs_w)
+
+        current_image = coeffs_i[0]  # LL
+        current_watermarked = coeffs_w[0]  # LL
+
+    # Estrazione del watermark
+    watermark_extracted = []
+
+    for level in reversed(range(levels)):
+        LL_i, (LH_i, HL_i, HH_i) = coeffs_image[level]
+        LL_w, (LH_w, HL_w, HH_w) = coeffs_watermarked[level]
+
+        # Ridimensiona le coordinate delle aree significative
+        scale_factor = 2 ** (level + 1)
+        significant_areas_dwt = set()
+        for i, j in significant_areas:
+            significant_areas_dwt.add((i // scale_factor, j // scale_factor))
+
+        # Estrazione del watermark dai coefficienti LH
+        bits_extracted = 0
+        for (i, j) in significant_areas_dwt:
+            if i < LH_i.shape[0] and j < LH_i.shape[1]:
+                if bits_extracted >= num_bits_embedded:
+                    break
+                if v == 'multiplicative':
+                    ratio = LH_w[i, j] / (LH_i[i, j] + 1e-5)
+                    wm_val = (ratio - 1) / alpha
+                elif v == 'additive':
+                    diff = LH_w[i, j] - LH_i[i, j]
+                    wm_val = diff / alpha
+                watermark_extracted.append(wm_val)
+                bits_extracted += 1
+
+    # Converti in array NumPy e limita la dimensione
+    watermark_extracted = np.array(watermark_extracted[:num_bits_embedded])
+    return watermark_extracted
 
 # Funzione per calcolare la similarità normalizzata
 def similarity(X, X_star):
-    # Calcola la somiglianza normalizzata tra il watermark originale e quello estratto
-    s = np.sum(np.multiply(X, X_star)) / (np.sqrt(np.sum(np.multiply(X, X))) * np.sqrt(np.sum(np.multiply(X_star, X_star))))
+    # Normalizzazione dei vettori
+    X_norm = (X - np.mean(X)) / np.std(X)
+    X_star_norm = (X_star - np.mean(X_star)) / np.std(X_star)
+
+    numerator = np.sum(X_norm * X_star_norm)
+    denominator = np.sqrt(np.sum(X_norm ** 2)) * np.sqrt(np.sum(X_star_norm ** 2))
+    if denominator == 0:
+        return 0
+    s = numerator / denominator
     return s
 
+# Funzione di attacco fornita
+def attack(img, sigma, th1, th2, n_layer):
+    # Se l'immagine è in scala di grigi, convertila in BGR
+    if len(img.shape) == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
+    redBlur = selective_blur(img[:,:,0], sigma, th1, th2)
+    greenBlur = selective_blur(img[:,:,1], sigma, th1, th2)
+    blueBlur = selective_blur(img[:,:,2], sigma, th1, th2)
 
-# Embedding function 
-def embedding(input1, input2):
-    # open image
-    #image = cv2.imread(input1, cv2.IMREAD_GRAYSCALE)
-    image = input1
+    redBlur = layers_blur(redBlur, sigma, n_layer)
+    greenBlur = layers_blur(greenBlur, sigma, n_layer)
+    blueBlur = layers_blur(blueBlur, sigma, n_layer)
 
-    if image is None:
-        raise ValueError(f"Immagine non trovata: {input1}")
+    # Unisci i tre canali
+    result = cv2.merge([redBlur, greenBlur, blueBlur])
 
-    # open watermark
-    watermark = np.load(input2)
-    if watermark.shape != image.shape:
-        watermark = cv2.resize(watermark, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
+    # Applica un blur agli ultimi tre bit
+    result = result & 254
 
-    # apply dct
-    dct_image = dct(dct(image, axis=0, norm='ortho'), axis=1, norm='ortho')
+    return result
 
-    dct_abs = np.abs(dct_image)
-    locations = np.argsort(-dct_abs, axis=None)
-    rows, cols = dct_image.shape
-    locations = [(val // cols, val % cols) for val in locations]
+def selective_blur(img, sigma, th1, th2):
+    # Applica un blur all'immagine
+    blurred = gaussian_filter(img, sigma)
 
-    watermarked_dct = dct_image.copy()
+    # Rilevamento dei bordi con Canny
+    mask = canny_edge_detection(img, th1, th2).astype(bool)
+
+    # Combina il blur con la maschera ottenuta dal rilevamento dei bordi
+    return np.where(mask, blurred, img)
+
+def canny_edge_detection(img, th1, th2):
+    d = 3  # Blur gaussiano
+
+    edgeresult = img.copy()
+    edgeresult = cv2.GaussianBlur(edgeresult, (2*d+1, 2*d+1), -1)
+
+    return cv2.Canny(edgeresult, th1, th2)
+
+def layers_blur(img, sigma, n_layer):
+    blurred = gaussian_filter(img, sigma)
+
+    tot = 0
+    for i in range(n_layer):
+        tot += 2**i
+
+    b2 = blurred.astype(np.uint8) & tot
+
+    t2 = 255 - tot
+    b3 = b2 | t2
+
+    img = img & b3
+
+    return img
+
+# Funzione principale per stimare la soglia τ
+def compute_similarity_threshold(num_images=101):
     alpha = 0.2
-
-    # insert watermark
-    for i, (loc, mark_val) in enumerate(zip(locations, watermark.flatten())):
-        watermarked_dct[loc] *= (1 + alpha * mark_val)
-
-    # apply inverse DCT
-    watermarked_image = idct(idct(watermarked_dct, axis=1, norm='ortho'), axis=0, norm='ortho')
-    output1 = np.uint8(np.clip(watermarked_image, 0, 255))
-
-    return output1
-
-
-
-
-def detection(input_image, watermarked_image, alpha, watermark_size):
-    # Carica l'immagine originale e quella con watermark
-    original_image = cv2.imread(input_image, cv2.IMREAD_GRAYSCALE)
-    if original_image is None:
-        raise ValueError(f"Immagine non trovata: {input_image}")
-    
-    # Calcola la DCT dell'immagine originale
-    dct_original = dct(dct(original_image, axis=0, norm='ortho'), axis=1, norm='ortho')
-    
-    # Calcola la DCT dell'immagine watermarked
-    dct_watermarked = dct(dct(watermarked_image, norm='ortho'), axis=1, norm='ortho')
-
-    # Trova i coefficienti DCT più significativi nell'immagine originale
-    dct_abs = np.abs(dct_original)
-    locations = np.argsort(-dct_abs, axis=None)
-    rows, cols = dct_original.shape
-    locations = [(val // cols, val % cols) for val in locations]
-
-    # Estrai il watermark dall'immagine watermarked
-    extracted_watermark = np.zeros(watermark_size, dtype=np.float64)
-
-    # Recupera il watermark dai coefficienti DCT più significativi
-    for i, loc in enumerate(locations[:watermark_size]):
-        extracted_watermark[i] = (dct_watermarked[loc] - dct_original[loc]) / (alpha * dct_original[loc])
-
-    return extracted_watermark
-
-random.seed(3)
-def awgn(img, std, seed):
-  mean = 0.0   # some constant
-  #np.random.seed(seed)
-  attacked = img + np.random.normal(mean, std, img.shape)
-  attacked = np.clip(attacked, 0, 255)
-  return attacked
-
-def blur(img, sigma):
-  from scipy.ndimage.filters import gaussian_filter
-  attacked = gaussian_filter(img, sigma)
-  return attacked
-
-def sharpening(img, sigma, alpha):
-  import scipy
-  from scipy.ndimage import gaussian_filter
-  import matplotlib.pyplot as plt
-
-  #print(img/255)
-  filter_blurred_f = gaussian_filter(img, sigma)
-
-  attacked = img + alpha * (img - filter_blurred_f)
-  return attacked
-
-def median(img, kernel_size):
-  from scipy.signal import medfilt
-  attacked = medfilt(img, kernel_size)
-  return attacked
-
-def resizing(img, scale):
-  from skimage.transform import rescale
-  x, y = img.shape
-  attacked = rescale(img, scale)
-  attacked = rescale(attacked, 1/scale)
-  attacked = attacked[:x, :y]
-  return attacked
-
-def jpeg_compression(img, QF):
-  from PIL import Image
-  img = Image.fromarray(img)
-  img.save('tmp.jpg',"JPEG", quality=QF)
-  attacked = Image.open('tmp.jpg')
-  attacked = np.asarray(attacked,dtype=np.uint8)
-  os.remove('tmp.jpg')
-
-  return attacked
-
-
-# Funzione per eseguire attacchi casuali
-def random_attack(img):
-    # Simula un attacco casuale sull'immagine
-    i = random.randint(1, 7)
-    if i == 1:
-        attacked = awgn(img, 3., 123)
-    elif i == 2:
-        attacked = blur(img, [3, 3])
-    elif i == 3:
-        attacked = sharpening(img, 1, 1)
-    elif i == 4:
-        attacked = median(img, [3, 3])
-    elif i == 5:
-        attacked = resizing(img, 0.8)
-    elif i == 6:
-        attacked = jpeg_compression(img, 75)
-    elif i == 7:
-        attacked = img  # Nessun attacco
-    return attacked
-
-# Funzione principale per stimare la soglia
-def compute_similarity_threshold( num_images=101, attack_func=random_attack):
-    mark_size = 1024
-    alpha = 0.1
+    levels = 2
+    texture_threshold = 0.3
     v = 'multiplicative'
     np.random.seed(seed=124)
 
@@ -166,64 +264,125 @@ def compute_similarity_threshold( num_images=101, attack_func=random_attack):
     # Elenca i file BMP dalla cartella
     images = sorted(glob.glob('Multimedia-Data-Security/sample_images/*.bmp'))
     print(images)
+    # Limita il numero di immagini se necessario
+    images = images[:num_images]
+
+    # Seleziona una sola immagine per visualizzare i risultati
+    image_sample_path = images[0] if images else None
+
     # Loop su ciascuna immagine
     for img_path in images:
-        image = cv2.imread(img_path, 0)
-        
-        # Incorporare Watermark
-        watermarked = embedding(image, 'mark.npy')
+        image = cv2.imread(img_path)
+        if image is None:
+            continue
+
+        # Genera un watermark casuale
+        mark_size = 1024  # Dimensione del watermark
+        mark = np.random.choice([-1, 1], size=mark_size)
+        mark = (mark + 1) / 2  # Porta i valori a 0 e 1
+
+        # Incorporare Watermark e ottenere il numero di bit incorporati
+        watermarked, num_bits_embedded = embedding(image, mark)
+
+        # Aggiorna la dimensione del watermark in base ai bit effettivamente incorporati
+        mark = mark[:num_bits_embedded]
 
         sample = 0
-        while sample < 10:
-            # Genera un watermark casuale (H0)
-            fakemark = np.random.uniform(0.0, 1.0, mark_size)
-            fakemark = np.uint8(np.rint(fakemark))
-            
-            # Applica un attacco casuale all'immagine con watermark
-            res_att = random_attack(watermarked)
-            
-            # Estrai il watermark attaccato e l'originale
-            wat_attacked = detection(img_path, res_att, alpha, mark_size)
-            wat_extracted = detection(img_path, watermarked, alpha, mark_size)
-            
+        while sample < 1:
+            # Genera un watermark falso della stessa dimensione
+            fakemark = np.random.choice([-1, 1], size=num_bits_embedded)
+            fakemark = (fakemark + 1) / 2
+
+            # Applica l'attacco all'immagine con watermark
+            res_att = attack(watermarked, sigma=1.0, th1=100, th2=200, n_layer=3)
+            res_att = np.uint8(np.clip(res_att, 0, 255))
+
+            # Estrai il watermark dall'immagine attaccata
+            wat_attacked = detection(image, res_att, num_bits_embedded)
+            # Estrai il watermark dall'immagine watermarked originale
+            wat_extracted = detection(image, watermarked, num_bits_embedded)
+
+            # Limita i watermark estratti alla dimensione corretta
+            wat_extracted = wat_extracted[:num_bits_embedded]
+            wat_attacked = wat_attacked[:num_bits_embedded]
+
             # Calcola la similarità H1 (watermark estratto vs attaccato)
-            scores.append(similarity(wat_extracted, wat_attacked))
+            s1 = similarity(wat_extracted, wat_attacked)
+            scores.append(s1)
             labels.append(1)
-            
+
             # Calcola la similarità H0 (fake watermark vs attaccato)
-            scores.append(similarity(fakemark, wat_attacked))
+            s0 = similarity(fakemark, wat_attacked)
+            scores.append(s0)
             labels.append(0)
 
             sample += 1
 
-    # Stampa i risultati
-    print('Array dei punteggi (scores): ', scores)
-    print('Array delle etichette (labels): ', labels)
+            # Se questa è l'immagine campione, salviamo le immagini per visualizzazione
+            if img_path == image_sample_path and sample == 1:
+                original_image_sample = image
+                watermarked_image_sample = watermarked
+                attacked_image_sample = res_att
 
     # Calcola la curva ROC
-    fpr, tpr, thresholds = roc_curve(labels, scores)
+    fpr, tpr, thresholds = roc_curve(labels, scores, drop_intermediate=False)
+    roc_auc = auc(fpr, tpr)
 
-    # Scegli la soglia ottimale (τ) dove FPR ∈ [0, 0.1]
-    fpr_limit = 0.1
-    valid_thresholds = thresholds[fpr <= fpr_limit]
-    best_threshold = valid_thresholds[-1]
-    print('Miglior soglia τ per FPR ∈ [0, 0.1]:', best_threshold)
-
-    # Salva la curva ROC
-    plt.plot(fpr, tpr, label='Curva ROC')
+    # Traccia la curva ROC con AUC
+    plt.figure()
+    lw = 2
+    plt.plot(fpr, tpr, color='darkorange',
+             lw=lw, label='AUC = %0.2f' % roc_auc)
+    plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+    plt.xlim([-0.01, 1.0])
+    plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
     plt.title('Curva ROC')
     plt.legend(loc="lower right")
     plt.savefig('roc_curve.png')
     plt.show()
-    # Path alla cartella con immagini BMP
 
+    # Trova il punto sulla curva ROC per FPR ≈ 0.05
+    target_fpr = 0.05
+    fpr_diffs = fpr - target_fpr
+    idx_tpr = np.where(fpr_diffs == min(i for i in fpr_diffs if i > 0))[0]
+    if len(idx_tpr) > 0:
+        idx = idx_tpr[0]
+        print('Per un FPR ≈ 0.05, il TPR corrispondente è %0.2f' % tpr[idx])
+        print('La soglia corrispondente è %0.2f' % thresholds[idx])
+        print('FPR effettivo: %0.2f' % fpr[idx])
+        best_threshold = thresholds[idx]
+    else:
+        print("Non è possibile trovare un FPR ≈ 0.05")
+        best_threshold = thresholds[-1]
 
+    # Visualizza le immagini prima e dopo l'embedding e l'attacco
+    if image_sample_path:
+        plt.figure(figsize=(10, 7))
 
+        plt.subplot(1, 3, 1)
+        plt.imshow(cv2.cvtColor(original_image_sample, cv2.COLOR_BGR2RGB))
+        plt.title('Immagine Originale')
+        plt.axis('off')
+
+        plt.subplot(1, 3, 2)
+        plt.imshow(watermarked_image_sample, cmap='gray')
+        plt.title('Immagine con Watermark')
+        plt.axis('off')
+
+        plt.subplot(1, 3, 3)
+        plt.imshow(attacked_image_sample, cmap='gray')
+        plt.title('Immagine Attaccata')
+        plt.axis('off')
+
+        plt.tight_layout()
+        plt.show()
+
+    return best_threshold
 
 # Calcola la soglia di similarità (τ)
 best_tau = compute_similarity_threshold()
 
 # Stampa la soglia per uso futuro
-print(best_tau)
+print("Soglia τ calcolata:", best_tau)
