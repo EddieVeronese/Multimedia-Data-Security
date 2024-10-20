@@ -276,10 +276,9 @@ def compute_similarity_threshold(num_images=101):
         if image is None:
             continue
 
-        # Genera un watermark casuale
-        mark_size = 1024  # Dimensione del watermark
-        mark = np.random.choice([-1, 1], size=mark_size)
-        mark = (mark + 1) / 2  # Porta i valori a 0 e 1
+        #Leggere il watermark
+        mark = np.load('Multimedia-Data-Security/mark.npy')
+        
 
         # Incorporare Watermark e ottenere il numero di bit incorporati
         watermarked, num_bits_embedded = embedding(image, mark)
@@ -288,7 +287,7 @@ def compute_similarity_threshold(num_images=101):
         mark = mark[:num_bits_embedded]
 
         sample = 0
-        while sample < 1:
+        while sample < 10:
             # Genera un watermark falso della stessa dimensione
             fakemark = np.random.choice([-1, 1], size=num_bits_embedded)
             fakemark = (fakemark + 1) / 2
@@ -356,28 +355,6 @@ def compute_similarity_threshold(num_images=101):
     else:
         print("Non è possibile trovare un FPR ≈ 0.05")
         best_threshold = thresholds[-1]
-
-    # Visualizza le immagini prima e dopo l'embedding e l'attacco
-    if image_sample_path:
-        plt.figure(figsize=(10, 7))
-
-        plt.subplot(1, 3, 1)
-        plt.imshow(cv2.cvtColor(original_image_sample, cv2.COLOR_BGR2RGB))
-        plt.title('Immagine Originale')
-        plt.axis('off')
-
-        plt.subplot(1, 3, 2)
-        plt.imshow(watermarked_image_sample, cmap='gray')
-        plt.title('Immagine con Watermark')
-        plt.axis('off')
-
-        plt.subplot(1, 3, 3)
-        plt.imshow(attacked_image_sample, cmap='gray')
-        plt.title('Immagine Attaccata')
-        plt.axis('off')
-
-        plt.tight_layout()
-        plt.show()
 
     return best_threshold
 
