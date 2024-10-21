@@ -7,51 +7,14 @@ import cv2
 from scipy.signal import convolve2d
 from math import sqrt
 
-#trova zone con texture
-def compute_texture_map(image):
-    sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3) 
-    sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
-    magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
-    return magnitude
-
-#trova zone molto chiare o molto scure
-def compute_bright_dark_areas(image):
-    dark_factor=0.6 #diminuisci per più restrittivo su scuro
-    bright_factor=1.4 #auemnta per più restrittivo su chiaro
-    threshold = np.mean(image)
-    dark_threshold=threshold*dark_factor
-    bright_threshold=threshold*bright_factor
-    dark_areas = np.argwhere(image < dark_threshold)
-    bright_areas = np.argwhere(image >= bright_threshold)
-    return dark_areas, bright_areas
-
-#trova contorni
-def compute_contours(image):
-    """ Calcola i contorni dell'immagine utilizzando il filtro di Canny. """
-    edges = cv2.Canny(image, 200, 600)  #aumenta valori per più restrittivo -> secondo deve essere 3x il primo
-    return np.argwhere(edges > 0) 
-
 
 def embedding(image_path, mark):
 
     levels=2 #più aumenta meno qualità
-    alpha=0.2 #più aumenta meno qualità
+    alpha=0.5 #più aumenta meno qualità
     v='multiplicative'
-    texture_threshold=0.3 #per soglia texture
 
     image = cv2.imread(image_path, 0)
-    
-    #trova zone adatte
-    texture_map = compute_texture_map(image)
-    dark_areas, bright_areas = compute_bright_dark_areas(image)
-    contour_areas = compute_contours(image)
-    max_texture = np.max(texture_map)
-    texture_mask = np.zeros_like(image)
-    texture_mask[texture_map >= (texture_threshold * max_texture)] = 255
-    texture_areas = np.argwhere(texture_mask == 255)
-
-    #unisce zone adatte (puoi cambiarle)
-    significant_areas = set(map(tuple, np.vstack((bright_areas, dark_areas, contour_areas, texture_areas))))
 
     coeffs2 = pywt.dwt2(image, 'haar')
     LL, (LH, HL, HH) = coeffs2
@@ -68,10 +31,12 @@ def embedding(image_path, mark):
         locations_LH = [(val // rows_LH, val % rows_LH) for val in locations_LH]
 
         # mette watermark ma solo in aree specifiche
+        threshold = 0.6 * np.max(abs_LH)
         watermarked_LH = abs_LH.copy()
-        mark_idx = 0 
-        for loc in locations_LH[1:]:
-            if tuple(loc) in significant_areas:
+
+        mark_idx=0
+        for i, loc in enumerate(locations_LH):
+            if abs_LH[loc] > threshold:
                 mark_val = mark[mark_idx % len(mark)]
                 if v == 'additive':
                     watermarked_LH[loc] += (alpha * mark_val)
