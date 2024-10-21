@@ -1,66 +1,81 @@
 import numpy as np
+import cv2
 from scipy.ndimage import gaussian_filter
-import os
-import numpy as np
+from scipy.signal import medfilt
+from skimage.transform import rescale
 from PIL import Image
-import matplotlib.pyplot as plt #to display images
-import matplotlib
-matplotlib.rcParams['figure.figsize'] = [5, 5]
+import os
 
-def attack(img, sigma, th1, th2, n_layer):
+def awgn(img, std, seed):
+    mean = 0.0
+    np.random.seed(seed)
+    attacked = img + np.random.normal(mean, std, img.shape)
+    attacked = np.clip(attacked, 0, 255)
+    return attacked
 
-    redBlur = selective_blur(img[:,:,0], sigma, th1, th2)
-    greenBlur = selective_blur(img[:,:,1], sigma, th1, th2)
-    blueBlur = selective_blur(img[:,:,2], sigma, th1, th2)
+def blur(img, sigma):
+    attacked = gaussian_filter(img, sigma)
+    return attacked
 
-    redBlur = layers_blur(redBlur, sigma, n_layer)
-    greenBlur = layers_blur(greenBlur, sigma, n_layer)
-    blueBlur = layers_blur(blueBlur, sigma, n_layer)
+def sharpening(img, sigma, alpha):
+    filter_blurred_f = gaussian_filter(img, sigma)
+    attacked = img + alpha * (img - filter_blurred_f)
+    return attacked
 
-    #Merge the three components
-    result = cv2.merge([redBlur,greenBlur,blueBlur])
+def median(img, kernel_size):
+    attacked = medfilt(img, kernel_size)
+    return attacked
 
-    #Blur last three layer
-    result = result & 254
+def resizing(img, scale):
+    x, y = img.shape
+    attacked = rescale(img, scale)
+    attacked = rescale(attacked, 1/scale)
+    attacked = attacked[:x, :y]
+    return attacked
 
-    return result
+def jpeg_compression(img, QF):
+    img_pil = Image.fromarray(img)
+    img_pil=img_pil.convert('L')
+    img_pil.save('tmp.jpg', "JPEG", quality=QF)
+    attacked = Image.open('tmp.jpg')
+    attacked = np.asarray(attacked, dtype=np.uint8)
+    os.remove('tmp.jpg')
+    return attacked
 
-def selective_blur(img, sigma, th1, th2):
-
-    # Blur the image
-    blurred = gaussian_filter(img, sigma)
-
-    #Canny detection for detecting the edges
-    mask = canny_edge_detection(img, th1, th2)
-
-    # Combination of the blur with the mask given by the canny detection
-    return np.where(mask, blurred, img)
-
-def canny_edge_detection(img, th1, th2):
-    d=3 # gaussian blur
-
-    matplotlib.rcParams['figure.figsize'] = [5, 5]
-
-    edgeresult=img.copy()
-    edgeresult = cv2.GaussianBlur(edgeresult, (2*d+1, 2*d+1), -1)[d:-d,d:-d]
-
-    #gray = cv2.cvtColor(edgeresult, cv2.COLOR_BGR2GRAY)
-
-    return cv2.Canny(img, th1, th2)
-
-def layers_blur(img, sigma, n_layer):
-
-    blurred = gaussian_filter(img, sigma)
-
-    tot = 0
-    for i in range(n_layer):
-        tot += 2**i
-
-    b2 = blurred & tot
-
-    t2 = 255 - tot
-    b3 = b2 | t2
-
-    img = img & b3
-
-    return img
+# Funzione principale di attacco
+def attacks(image, attack_name, param_array):
+    
+    attacked_image = image.copy()
+    
+    #check if there is one or more attack
+    if isinstance(attack_name, str):
+        attack_name = [attack_name]
+        param_array = [param_array]
+    
+    # perform the attacks in the input
+    for attack, params in zip(attack_name, param_array):
+        if attack == 'awgn':
+            std, seed = params
+            attacked_image = awgn(attacked_image, std, seed)
+        
+        elif attack == 'blur':
+            sigma = params
+            attacked_image = blur(attacked_image, sigma)
+        
+        elif attack == 'sharpening':
+            sigma, alpha = params
+            attacked_image = sharpening(attacked_image, sigma, alpha)
+        
+        elif attack == 'median':
+            kernel_size = params
+            attacked_image = median(attacked_image, kernel_size)
+        
+        elif attack == 'resize':
+            scale = params
+            attacked_image = resizing(attacked_image, scale)
+        
+        elif attack == 'jpeg':
+            QF = params
+            attacked_image = jpeg_compression(attacked_image, QF)
+    
+    return attacked_image

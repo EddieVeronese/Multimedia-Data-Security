@@ -3,8 +3,10 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
-from scipy.fft import dct, idct
 import random
+from embedding import embedding
+from detection import detection
+from detection import similarity
 
 random.seed(3)
 def awgn(img, std, seed):
@@ -53,142 +55,99 @@ def jpeg_compression(img, QF):
 
   return attacked
 
-# Funzioni di attacco (già definite)
 def random_attack(img):
-    i = random.randint(1,7)
-    if i == 1:
-        attacked = awgn(img, 3., 123)
-    elif i == 2:
-        attacked = blur(img, [3, 3])
-    elif i == 3:
-        attacked = sharpening(img, 1, 1)
-    elif i == 4:
-        attacked = median(img, [3, 3])
-    elif i == 5:
-        attacked = resizing(img, 0.8)
-    elif i == 6:
-        attacked = jpeg_compression(img, 75)
-    else:
-        attacked = img
-    return attacked
+  i = random.randint(1,7)
+  if i==1:
+    attacked = awgn(img, 3., 123)
+  elif i==2:
+    attacked = blur(img, [3, 3])
+  elif i==3:
+    attacked = sharpening(img, 1, 1)
+  elif i==4:
+    attacked = median(img, [3, 3])
+  elif i==5:
+    attacked = resizing(img, 0.8)
+  elif i==6:
+    attacked = jpeg_compression(img, 75)
+  elif i ==7:
+     attacked = img
+  return attacked
 
-from scipy.fft import dct, idct
+# Parametri generali
+mark_size = 1024
+alpha = 0.1
+v = 'multiplicative'
+np.random.seed(seed=124)
 
-def embedding(image, mark_size, alpha, v='multiplicative'):
-    # Calcola la trasformata DCT bidimensionale dell'immagine
-    ori_dct = dct(dct(image, axis=0, norm='ortho'), axis=1, norm='ortho')
+# Percorso alla cartella immagini
+image_folder = './../images/'
 
-    # Ottiene i coefficienti più significativi
-    sign = np.sign(ori_dct)
-    ori_dct = np.abs(ori_dct)
-    locations = np.argsort(-ori_dct, axis=None)  # Ordine decrescente dei valori DCT
-    rows = image.shape[0]
-    locations = [(val // rows, val % rows) for val in locations]  # Coordinate dei coefficienti
+# Inizializza gli array per score e label
+scores = []
+labels = []
 
-    # Carica il watermark
-    mark = np.random.uniform(0.0, 1.0, mark_size)
-    mark = np.uint8(np.rint(mark))
+# Lista di nomi file delle immagini numerate da 001 a 100
+image_filenames = [f'{i:03}.bmp' for i in range(1, 101)]  # 001.bmp, 002.bmp, ..., 100.bmp
 
-    # Embedding del watermark nei coefficienti DCT
-    watermarked_dct = ori_dct.copy()
-    for idx, (loc, mark_val) in enumerate(zip(locations[1:], mark)):
-        if v == 'additive':
-            watermarked_dct[loc] += (alpha * mark_val)
-        elif v == 'multiplicative':
-            watermarked_dct[loc] *= 1 + (alpha * mark_val)
+sample = 0
+while sample < 500:  # Numero totale di iterazioni
+    for filename in image_filenames:
+        # Percorso completo all'immagine
+        im_path = os.path.join(image_folder, filename)
+        
+        # Carica l'immagine in scala di grigi
+        im = cv2.imread(im_path, 0)
+        
+        # Verifica se l'immagine è stata caricata correttamente
+        if im is None:
+            print(f"Immagine {filename} non trovata o non leggibile.")
+        else:
+            print(f"Immagine {filename} caricata con successo.")
+        
+        # Embed il watermark nell'immagine
+        watermarked = embedding(im_path)
+        
+        # Crea un watermark casuale per H0 (ipotesi negativa)
+        fakemark = np.random.uniform(0.0, 1.0, mark_size)
+        fakemark = np.uint8(np.rint(fakemark))
 
-    # Ripristina il segno e ritorna all'immagine spaziale
-    watermarked_dct *= sign
-    watermarked = np.uint8(idct(idct(watermarked_dct, axis=1, norm='ortho'), axis=0, norm='ortho'))
+        # Applica un attacco casuale all'immagine watermarkata
+        res_att = random_attack(watermarked)
 
-    return mark, watermarked
+        # Estrai il watermark dall'immagine attaccata
+        wat_attacked = detection(im, res_att)
+        wat_extracted = detection(im, watermarked)
 
+        # Calcola la similarità H1 (con l'immagine attaccata)
+        scores.append(similarity(wat_extracted, wat_attacked))
+        labels.append(1)
 
-def detection(image, watermarked, alpha, mark_size, v='multiplicative'):
-    # Calcola la DCT dell'immagine originale e di quella watermarked
-    ori_dct = dct(dct(image, axis=0, norm='ortho'), axis=1, norm='ortho')
-    wat_dct = dct(dct(watermarked, axis=0, norm='ortho'), axis=1, norm='ortho')
+        # Calcola la similarità H0 (con il watermark casuale)
+        scores.append(similarity(fakemark, wat_attacked))
+        labels.append(0)
 
-    # Ordina i coefficienti per importanza percettiva
-    ori_dct = np.abs(ori_dct)
-    wat_dct = np.abs(wat_dct)
-    locations = np.argsort(-ori_dct, axis=None)  # Ordine decrescente dei valori DCT
-    rows = image.shape[0]
-    locations = [(val // rows, val % rows) for val in locations]
+        # Incrementa il contatore dei sample
+        sample += 1
+        if sample >= 500:  # Limita il numero totale di sample
+            break
 
-    # Estrarre il watermark
-    w_extracted = np.zeros(mark_size, dtype=np.float64)
-    for idx, loc in enumerate(locations[1:mark_size + 1]):
-        if v == 'additive':
-            w_extracted[idx] = (wat_dct[loc] - ori_dct[loc]) / alpha
-        elif v == 'multiplicative':
-            w_extracted[idx] = (wat_dct[loc] - ori_dct[loc]) / (alpha * ori_dct[loc])
+# Generazione della curva ROC e calcolo dell'AUC
+fpr, tpr, tau = roc_curve(np.asarray(labels), np.asarray(scores), drop_intermediate=False)
+roc_auc = auc(fpr, tpr)
+plt.figure()
+lw = 2
+plt.plot(fpr, tpr, color='darkorange', lw=lw, label='AUC = %0.2f' % roc_auc)
+plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+plt.xlim([-0.01, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver operating characteristic')
+plt.legend(loc="lower right")
+plt.show()
 
-    return w_extracted
-
-
-def similarity(X, X_star):
-    # Calcola la similitudine tra due watermark
-    s = np.sum(np.multiply(X, X_star)) / np.sqrt(np.sum(np.multiply(X_star, X_star)))
-    return s
-
-
-def calculate_threshold(images_folder, mark_file, mark_size=1024, alpha=0.1, v='multiplicative'):
-    np.random.seed(124)  # Seed per riproducibilità
-
-    # Carico il watermark salvato
-    mark = np.load(mark_file)
-
-    # Array per punteggi (scores) e etichette (labels)
-    scores = []
-    labels = []
-
-    # Leggo tutte le immagini dalla cartella
-    image_files = [os.path.join(images_folder, f) for f in os.listdir(images_folder) if f.endswith('.bmp')]
-
-    # Embedding del watermark in ciascuna immagine
-    for img_file in image_files:
-        img = cv2.imread(img_file, 0)  # Legge l'immagine in scala di grigi
-
-        # Applica l'embedding del watermark all'immagine
-        _, watermarked_img = embedding(img, mark_size, alpha, v)
-
-        # Ciclo per attaccare le immagini e calcolare la soglia
-        for _ in range(10):  # Attacca ogni immagine 10 volte
-            attacked_img = random_attack(watermarked_img)
-            extracted_attacked = detection(img, attacked_img, alpha, mark_size, v)
-            extracted_original = detection(img, watermarked_img, alpha, mark_size, v)
-
-            # Similitudine tra watermark estratto e watermark originale (Ipotesi vera)
-            scores.append(similarity(mark, extracted_attacked))
-            labels.append(1)
-
-            # Genera un watermark casuale (Ipotesi falsa)
-            fake_mark = np.random.uniform(0.0, 1.0, mark_size)
-            fake_mark = np.uint8(np.rint(fake_mark))
-            scores.append(similarity(fake_mark, extracted_attacked))
-            labels.append(0)
-
-    # Calcolo della ROC e della soglia ottimale τ
-    fpr, tpr, thresholds = roc_curve(np.asarray(labels), np.asarray(scores), drop_intermediate=False)
-    roc_auc = auc(fpr, tpr)
-
-    # Selezionare la soglia che corrisponde a un FPR ∈ [0, 0.1]
-    optimal_idx = np.where((fpr <= 0.1))[0][-1]
-    tau_optimal = thresholds[optimal_idx]
-
-    # Visualizzazione della curva ROC
-    plt.figure()
-    lw = 2
-    plt.plot(fpr, tpr, color='darkorange', lw=lw, label='AUC = %0.2f' % roc_auc)
-    plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
-    plt.xlim([-0.01, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Curva ROC')
-    plt.legend(loc="lower right")
-    plt.show()
-
-    return tau_optimal
-
+# Trova la soglia corrispondente ad un FPR di circa 0.05
+idx_tpr = np.where((fpr-0.05)==min(i for i in (fpr-0.05) if i > 0))
+print('Per un FPR ≈ 0.05, TPR = %0.2f' % tpr[idx_tpr[0][0]])
+print('Per un FPR ≈ 0.05, soglia = %0.2f' % tau[idx_tpr[0][0]])
+print('FPR verificato: %0.2f' % fpr[idx_tpr[0][0]])
