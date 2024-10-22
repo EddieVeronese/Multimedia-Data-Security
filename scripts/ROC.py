@@ -47,7 +47,7 @@ def random_attack(watermarked_image):
     """
     Seleziona casualmente un attacco e lo applica all'immagine.
     """
-    attack_number = random.randint(1, 6)  # Genera un numero casuale tra 1 e 6
+    attack_number = random.randint(1, 7)  # Genera un numero casuale tra 1 e 6
     
     # Switch per selezionare l'attacco in base al numero casuale
     if attack_number == 1:
@@ -68,12 +68,18 @@ def random_attack(watermarked_image):
         
     elif attack_number == 5:
         print("Applico resize")
+
         attacked_image = attacks(watermarked_image, 'resize', 0.95)
         
     elif attack_number == 6:
         print("Applico JPEG compression")
         attacked_image = attacks(watermarked_image, 'jpeg', 20)
     
+    elif attack_number == 7:
+        print("Applico no attack")
+        attacked_image = watermarked_image
+
+
     return attacked_image
 
 def estimate_threshold(images, original_watermark):

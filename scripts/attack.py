@@ -32,9 +32,10 @@ def median(img, kernel_size, option):
 
 def resizing(img, scale, option):
     x, y = img.shape
-    attacked = rescale(img, scale)
-    attacked = rescale(attacked, 1/scale)
+    attacked = rescale(img, scale, order=0)
+    attacked = rescale(attacked, 1/scale, order=0)
     attacked = attacked[:x, :y]
+
     attacked = apply_mask(img, attacked, option)
     return attacked
 
