@@ -1,153 +1,144 @@
 import os
-import numpy as np
 import cv2
+import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import roc_curve
+from embedding2 import *
+from detection import *
+from attack import *
 import random
-from embedding import embedding
-from detection import detection
-from detection import similarity
 
-random.seed(3)
-def awgn(img, std, seed):
-  mean = 0.0   # some constant
-  #np.random.seed(seed)
-  attacked = img + np.random.normal(mean, std, img.shape)
-  attacked = np.clip(attacked, 0, 255)
-  return attacked
+def similaritys(X,X_star):
+    #Computes the similarity measure between the original and the new watermarks.
+    s = np.sum(np.multiply(X, X_star)) / (np.sqrt(np.sum(np.multiply(X, X))) * np.sqrt(np.sum(np.multiply(X_star, X_star))))
+    return s
 
-def blur(img, sigma):
-  from scipy.ndimage.filters import gaussian_filter
-  attacked = gaussian_filter(img, sigma)
-  return attacked
+def save_image_temp(image, image_id, folder="temp_images"):
+    """
+    Salva temporaneamente un'immagine su disco per passare il percorso a embedding2.
+    """
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    temp_filename = os.path.join(folder, f"temp_image_{image_id}.bmp")
+    cv2.imwrite(temp_filename, image)
+    return temp_filename
 
-def sharpening(img, sigma, alpha):
-  import scipy
-  from scipy.ndimage import gaussian_filter
-  import matplotlib.pyplot as plt
-
-  #print(img/255)
-  filter_blurred_f = gaussian_filter(img, sigma)
-
-  attacked = img + alpha * (img - filter_blurred_f)
-  return attacked
-
-def median(img, kernel_size):
-  from scipy.signal import medfilt
-  attacked = medfilt(img, kernel_size)
-  return attacked
-
-def resizing(img, scale):
-  from skimage.transform import rescale
-  x, y = img.shape
-  attacked = rescale(img, scale)
-  attacked = rescale(attacked, 1/scale)
-  attacked = attacked[:x, :y]
-  return attacked
-
-def jpeg_compression(img, QF):
-  from PIL import Image
-  img = Image.fromarray(img)
-  img.save('tmp.jpg',"JPEG", quality=QF)
-  attacked = Image.open('tmp.jpg')
-  attacked = np.asarray(attacked,dtype=np.uint8)
-  os.remove('tmp.jpg')
-
-  return attacked
-
-def random_attack(img):
-  i = random.randint(1,7)
-  if i==1:
-    attacked = awgn(img, 3., 123)
-  elif i==2:
-    attacked = blur(img, [3, 3])
-  elif i==3:
-    attacked = sharpening(img, 1, 1)
-  elif i==4:
-    attacked = median(img, [3, 3])
-  elif i==5:
-    attacked = resizing(img, 0.8)
-  elif i==6:
-    attacked = jpeg_compression(img, 75)
-  elif i ==7:
-     attacked = img
-  return attacked
-
-# Parametri generali
-mark_size = 1024
-alpha = 0.1
-v = 'multiplicative'
-np.random.seed(seed=124)
-
-# Percorso alla cartella immagini
-image_folder = './../images/'
-
-# Inizializza gli array per score e label
-scores = []
-labels = []
-
-# Lista di nomi file delle immagini numerate da 001 a 100
-image_filenames = [f'{i:03}.bmp' for i in range(1, 101)]  # 001.bmp, 002.bmp, ..., 100.bmp
-
-sample = 0
-while sample < 500:  # Numero totale di iterazioni
-    for filename in image_filenames:
-        # Percorso completo all'immagine
-        im_path = os.path.join(image_folder, filename)
-        
-        # Carica l'immagine in scala di grigi
-        im = cv2.imread(im_path, 0)
-        
-        # Verifica se l'immagine è stata caricata correttamente
-        if im is None:
-            print(f"Immagine {filename} non trovata o non leggibile.")
+def load_images_from_folder(folder_path, file_format="bmp", num_images=100):
+    """
+    Carica un insieme di immagini dalla cartella specificata e restituisce una lista di immagini.
+    """
+    images = []
+    for i in range(1, num_images + 1):
+        filename = f"{folder_path}/{i:04d}.{file_format}"
+        image = cv2.imread(filename, 0)  # Leggi l'immagine in scala di grigi
+        if image is not None:
+            images.append(image)
         else:
-            print(f"Immagine {filename} caricata con successo.")
+            print(f"Image {filename} could not be loaded.")
+    return images
+
+def generate_random_watermark(mark_size):
+    """
+    Genera un watermark casuale di una data dimensione.
+    """
+    return np.random.choice([0, 1], size=mark_size)
+
+def random_attack(watermarked_image):
+    """
+    Seleziona casualmente un attacco e lo applica all'immagine.
+    """
+    attack_number = random.randint(1, 6)  # Genera un numero casuale tra 1 e 6
+    
+    # Switch per selezionare l'attacco in base al numero casuale
+    if attack_number == 1:
+        print("Applico blur")
+        attacked_image = attacks(watermarked_image, 'blur', 3)
         
-        # Embed il watermark nell'immagine
-        watermarked = embedding(im_path)
+    elif attack_number == 2:
+        print("Applico AWGN")
+        attacked_image = attacks(watermarked_image, 'awgn', [10, 42])
         
-        # Crea un watermark casuale per H0 (ipotesi negativa)
-        fakemark = np.random.uniform(0.0, 1.0, mark_size)
-        fakemark = np.uint8(np.rint(fakemark))
+    elif attack_number == 3:
+        print("Applico sharpening")
+        attacked_image = attacks(watermarked_image, 'sharpening', [0.5, 0.7])
+        
+    elif attack_number == 4:
+        print("Applico median")
+        attacked_image = attacks(watermarked_image, 'median', 3)
+        
+    elif attack_number == 5:
+        print("Applico resize")
+        attacked_image = attacks(watermarked_image, 'resize', 0.9)
+        
+    elif attack_number == 6:
+        print("Applico JPEG compression")
+        attacked_image = attacks(watermarked_image, 'jpeg', 5)
+    
+    return attacked_image
 
-        # Applica un attacco casuale all'immagine watermarkata
-        res_att = random_attack(watermarked)
+def estimate_threshold(images, original_watermark):
+    """
+    Stima la soglia (threshold) basata su ROC curve.
+    
+    Parametri:
+    - images: lista di immagini su cui eseguire embedding e attacco.
+    - original_watermark: il watermark originale da inserire.
+    - mark_size: dimensione del watermark.
+    - detection_func: funzione per estrarre il watermark e fare la rilevazione.
+    - similarity_func: funzione per calcolare la similarità tra due watermark.
+    
+    Ritorna:
+    - threshold: soglia ottimale basata su ROC.
+    """
 
-        # Estrai il watermark dall'immagine attaccata
-        wat_attacked = detection(im, res_att)
-        wat_extracted = detection(im, watermarked)
+    mark_size=1024
+    scores = []
+    labels = []
+    num_repeats=10
+    level=0
+    # Loop sulle immagini
+    for image_id, image in enumerate(images):
+        level+=1
+        ranger=0
+        for _ in range(num_repeats):
+          ranger+=1
+          print(f"{level}{ranger}")
+        # 1. Salva l'immagine temporaneamente e passa il percorso a embedding2
+          temp_image_path = save_image_temp(image, image_id)
 
-        # Calcola la similarità H1 (con l'immagine attaccata)
-        scores.append(similarity(wat_extracted, wat_attacked))
-        labels.append(1)
+          # 2. Embed il watermark originale
+          watermarked_image = embedding2(temp_image_path, original_watermark)
+          
+          # 3. Attacco l'immagine
+          attacked_image = random_attack(watermarked_image)
+          
+          # 4. Estrai il watermark dall'immagine attaccata
+          extracted_watermark = extract_watermark(image, attacked_image)
+          
+          # 5. Calcola la similarità (True Positive)
+          score_tp = similaritys(original_watermark, extracted_watermark)
+          scores.append(score_tp)
+          labels.append(1)  # True Positive
+          
+          # 6. Genera un watermark casuale e confrontalo
+          random_watermark = generate_random_watermark(mark_size)
+          score_tn = similaritys(random_watermark, extracted_watermark)
+          scores.append(score_tn)
+          labels.append(0)  # True Negative
 
-        # Calcola la similarità H0 (con il watermark casuale)
-        scores.append(similarity(fakemark, wat_attacked))
-        labels.append(0)
+    # Genera la ROC curve
+    fpr, tpr, thresholds = roc_curve(labels, scores)
 
-        # Incrementa il contatore dei sample
-        sample += 1
-        if sample >= 500:  # Limita il numero totale di sample
-            break
+    # Seleziona la soglia ottimale per un FPR ∈ [0, 0.1]
+    optimal_idx = np.where((fpr >= 0) & (fpr <= 0.1))[0][-1]
+    optimal_threshold = thresholds[optimal_idx]
 
-# Generazione della curva ROC e calcolo dell'AUC
-fpr, tpr, tau = roc_curve(np.asarray(labels), np.asarray(scores), drop_intermediate=False)
-roc_auc = auc(fpr, tpr)
-plt.figure()
-lw = 2
-plt.plot(fpr, tpr, color='darkorange', lw=lw, label='AUC = %0.2f' % roc_auc)
-plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
-plt.xlim([-0.01, 1.0])
-plt.ylim([0.0, 1.05])
-plt.xlabel('False Positive Rate')
-plt.ylabel('True Positive Rate')
-plt.title('Receiver operating characteristic')
-plt.legend(loc="lower right")
-plt.show()
+    # Plot della ROC curve (facoltativo)
+    plt.figure()
+    plt.plot(fpr, tpr, label='ROC curve')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve for Watermark Detection')
+    plt.show()
 
-# Trova la soglia corrispondente ad un FPR di circa 0.05
-idx_tpr = np.where((fpr-0.05)==min(i for i in (fpr-0.05) if i > 0))
-print('Per un FPR ≈ 0.05, TPR = %0.2f' % tpr[idx_tpr[0][0]])
-print('Per un FPR ≈ 0.05, soglia = %0.2f' % tau[idx_tpr[0][0]])
-print('FPR verificato: %0.2f' % fpr[idx_tpr[0][0]])
+    return optimal_threshold
