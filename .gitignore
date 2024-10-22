@@ -1,1 +1,6 @@
 *.bmp
+
+OFF_MDS_ENV/
+images/
+
+requisites.txt
