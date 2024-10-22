@@ -128,12 +128,16 @@ def attacks(image, attack_name, param_array):
     
     # perform the attacks in the input
     for attack, params in zip(attack_name, param_array):
+
+        if  not isinstance(params, list):
+            params = [params]
+
         if attack == 'awgn':
             std, seed, option = params + [0] * (3 - len(params))
             attacked_image = awgn(attacked_image, std, seed, option)
         
         elif attack == 'blur':
-            sigma, option = params + [0] * (3 - len(params))
+            sigma, option = params + [0] * (2 - len(params))
             attacked_image = blur(attacked_image, sigma, option)
         
         elif attack == 'sharpening':
@@ -141,15 +145,15 @@ def attacks(image, attack_name, param_array):
             attacked_image = sharpening(attacked_image, sigma, alpha, option)
         
         elif attack == 'median':
-            kernel_size, option = params + [0] * (3 - len(params))
+            kernel_size, option = params + [0] * (2 - len(params))
             attacked_image = median(attacked_image, kernel_size, option)
         
         elif attack == 'resize':
-            scale, option = params + [0] * (3 - len(params))
+            scale, option = params + [0] * (2 - len(params))
             attacked_image = resizing(attacked_image, scale, option)
         
         elif attack == 'jpeg':
-            QF, option = params + [0] * (3 - len(params))
+            QF, option = params + [0] * (2 - len(params))
             attacked_image = jpeg_compression(attacked_image, QF, option)
     
     return attacked_image
