@@ -50,17 +50,20 @@ def embedding2(image_path, mark):
         # embed in multiplicative LH
         watermarked_LH = abs_LH.copy()
         for idx, (loc,mark_val) in enumerate(zip(locations_LH[1:], mark)):
-            watermarked_LH[loc] *= 1 + ( alpha * mark_val* mask[loc])
+            #watermarked_LH[loc] *= 1 + ( alpha * mark_val* mask[loc])
+            watermarked_LH[loc] *= 1 + ( alpha * mark_val)
         
         # emend multiplicative in LH
         watermarked_HL = abs_HL.copy()
         for idx, (loc,mark_val) in enumerate(zip(locations_HL[1:], mark)):
-            watermarked_HL[loc] *= 1 + ( alpha * mark_val* mask[loc])
+            #watermarked_HL[loc] *= 1 + ( alpha * mark_val* mask[loc])
+            watermarked_HL[loc] *= 1 + ( alpha * mark_val)
         
         # emned in multiplicative LH
         watermarked_HH = abs_HH.copy()
         for idx, (loc,mark_val) in enumerate(zip(locations_HH[1:], mark)):
-            watermarked_HH[loc] *= 1 + ( alpha * mark_val* mask[loc])
+            #watermarked_HH[loc] *= 1 + ( alpha * mark_val* mask[loc])
+            watermarked_HH[loc] *= 1 + ( alpha * mark_val)
 
         # ritorna a dominio spaziale
         watermarked_LH *= sign_LH

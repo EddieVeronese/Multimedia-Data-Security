@@ -78,16 +78,19 @@ def extract_watermark(original_image, watermarked_image):
         w_ex_HH = np.zeros(mark_size, dtype=np.float64)
 
         # Estrazione da LH
-        for idx, loc in enumerate(locations_LH[:mark_size]):
-            w_ex_LH[idx] = (LH_w[loc] / LH_or[loc] - 1) / (alpha * mask[loc])
+        for idx, loc in enumerate(locations_LH[1:mark_size+1]):
+            #w_ex_LH[idx] = (LH_w[loc] - LH_or[loc]) / (alpha * mask[loc]*LH_or[loc])
+            w_ex_LH[idx] = (LH_w[loc] - LH_or[loc]) / (alpha *LH_or[loc])
         
         # Estrazione da HL
-        for idx, loc in enumerate(locations_HL[:mark_size]):
-            w_ex_HL[idx] = (HL_w[loc] / HL_or[loc] - 1) / (alpha * mask[loc])
+        for idx, loc in enumerate(locations_HL[1:mark_size+1]):
+            #w_ex_HL[idx] = (HL_w[loc] - HL_or[loc]) / (alpha * mask[loc]*HL_or[loc])
+            w_ex_HL[idx] = (HL_w[loc] - HL_or[loc]) / (alpha *HL_or[loc])
 
         # Estrazione da HH
-        for idx, loc in enumerate(locations_HH[:mark_size]):
-            w_ex_HH[idx] = (HH_w[loc] / HH_or[loc] - 1) / (alpha * mask[loc])
+        for idx, loc in enumerate(locations_HH[1:mark_size+1]):
+            #w_ex_HH[idx] = (HH_w[loc] - HH_or[loc]) / (alpha * mask[loc]*HH_or[loc])
+            w_ex_HH[idx] = (HH_w[loc] - HH_or[loc]) / (alpha*HH_or[loc])
 
         # Combina i watermark estratti da LH, HL, e HH
         w_ex_level = (w_ex_LH + w_ex_HL + w_ex_HH) / 3
@@ -101,8 +104,9 @@ def extract_watermark(original_image, watermarked_image):
             LL_w, (LH_w, HL_w, HH_w) = pywt.dwt2(LL_w, 'haar')
 
     # Calcola la media dei watermark estratti da tutti i livelli
-    final_watermark = sum(watermark_levels) / len(watermark_levels)
+    #final_watermark = sum(watermark_levels) / len(watermark_levels)
 
+    final_watermark=watermark_levels
     return final_watermark
 
 
@@ -128,7 +132,7 @@ def detection(original, watermarked, attacked):
     wpsnr_value = wpsnr(watermarked, attacked)
     
     # Define threshold for determining if the watermark is detected
-    threshold_tau = 0.85
+    threshold_tau = 0.7
     
     # Determine if the watermark is considered present
     watermark_detected = 1 if best_similarity >= threshold_tau else 0

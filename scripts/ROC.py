@@ -2,7 +2,7 @@ import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve
+from sklearn.metrics import roc_curve, auc
 from embedding2 import *
 from detection import *
 from attack import *
@@ -52,15 +52,15 @@ def random_attack(watermarked_image):
     # Switch per selezionare l'attacco in base al numero casuale
     if attack_number == 1:
         print("Applico blur")
-        attacked_image = attacks(watermarked_image, 'blur', 3)
+        attacked_image = attacks(watermarked_image, 'blur', 1)
         
     elif attack_number == 2:
         print("Applico AWGN")
-        attacked_image = attacks(watermarked_image, 'awgn', [10, 42])
+        attacked_image = attacks(watermarked_image, 'awgn', [5, 42])
         
     elif attack_number == 3:
         print("Applico sharpening")
-        attacked_image = attacks(watermarked_image, 'sharpening', [0.5, 0.7])
+        attacked_image = attacks(watermarked_image, 'sharpening', [0.3, 0.5])
         
     elif attack_number == 4:
         print("Applico median")
@@ -68,11 +68,11 @@ def random_attack(watermarked_image):
         
     elif attack_number == 5:
         print("Applico resize")
-        attacked_image = attacks(watermarked_image, 'resize', 0.9)
+        attacked_image = attacks(watermarked_image, 'resize', 0.95)
         
     elif attack_number == 6:
         print("Applico JPEG compression")
-        attacked_image = attacks(watermarked_image, 'jpeg', 5)
+        attacked_image = attacks(watermarked_image, 'jpeg', 20)
     
     return attacked_image
 
@@ -94,12 +94,12 @@ def estimate_threshold(images, original_watermark):
     mark_size=1024
     scores = []
     labels = []
-    num_repeats=10
-    level=0
+    num_repeats=20
+    level=-1
     # Loop sulle immagini
     for image_id, image in enumerate(images):
         level+=1
-        ranger=0
+        ranger=-1
         for _ in range(num_repeats):
           ranger+=1
           print(f"{level}{ranger}")
@@ -126,19 +126,30 @@ def estimate_threshold(images, original_watermark):
           scores.append(score_tn)
           labels.append(0)  # True Negative
 
-    # Genera la ROC curve
-    fpr, tpr, thresholds = roc_curve(labels, scores)
-
-    # Seleziona la soglia ottimale per un FPR ∈ [0, 0.1]
-    optimal_idx = np.where((fpr >= 0) & (fpr <= 0.1))[0][-1]
-    optimal_threshold = thresholds[optimal_idx]
-
-    # Plot della ROC curve (facoltativo)
+    fpr, tpr, thresholds = roc_curve(labels, scores, drop_intermediate=False)
+    
+    # Calcolo dell'AUC
+    roc_auc = auc(fpr, tpr)
+    
+    # Trova il valore del threshold per FPR ≈ 0.05
+    idx_tpr = np.where((fpr-0.05) == min(i for i in (fpr-0.05) if i > 0))
+    
+    # Mostra la ROC curve
     plt.figure()
-    plt.plot(fpr, tpr, label='ROC curve')
+    lw = 2
+    plt.plot(fpr, tpr, color='darkorange', lw=lw, label='AUC = %0.2f' % roc_auc)
+    plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+    plt.xlim([-0.01, 1.0])
+    plt.ylim([0.0, 1.05])
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title('ROC Curve for Watermark Detection')
+    plt.title('Receiver Operating Characteristic')
+    plt.legend(loc="lower right")
     plt.show()
+    
+    # Stampa il TPR e il threshold corrispondente a FPR ≈ 0.05
+    print('Per FPR ≈ 0.05, il TPR corrispondente è: %0.2f' % tpr[idx_tpr[0][0]])
+    print('Per FPR ≈ 0.05, la soglia corrispondente è: %0.2f' % thresholds[idx_tpr[0][0]])
 
-    return optimal_threshold
+# Alla fine del tuo ciclo di stima threshold, chiama la funzione plot_roc_and_find_threshold
+   
