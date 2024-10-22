@@ -52,46 +52,69 @@ def apply_mask(img, attacked, option):
 
     mask = np.zeros_like(img)
     th1, th2 = 20, 60 # Parameters for the canny detection
-    threshold = 0.5 #Threshold for the texture computation
 
     if option == 0: #Apply filter to the entire image
         return attacked
     elif option == 1: #Mask of the border
-        img_scaled = np.uint8(img * 255)
-        mask = cv2.Canny(img_scaled, th1, th2)
+        mask = compute_edges(img)
+    
     elif option == 2:   #Mask the textured areas
-
-        texture_map = compute_texture_map(img)
-
-        max_texture = np.max(texture_map)
-        mask[texture_map >= (threshold * max_texture)] = 255
+        mask = compute_texture_map(img)
 
     elif option == 3: #Mask in bright areas
-        dark_areas, bright_areas = compute_bright_dark_areas(img)
-        mask[tuple(bright_areas.T)] = 255
+        mask = compute_dark_areas(img)
+
     elif option == 4: #Mask on the dark areas
-        dark_areas, bright_areas = compute_bright_dark_areas(img)
-        mask[tuple(dark_areas.T)] = 255
+        mask = compute_bright_areas(img)
 
     return np.where(mask, attacked, img)
 
 
+#Trova i contorni dell'immagine
+def compute_edges(image):
+    mask = np.zeros_like(image)
+    th1, th2 = 20, 60 # Parameters for the canny detection
+
+    img_scaled = np.uint8(image * 255)
+    return cv2.Canny(img_scaled, th1, th2)
+
+#Trova le zone con texture
 def compute_texture_map(image):
+
+    threshold = 0.5 #Threshold for the texture computation
+    mask = np.zeros_like(image)
+
     sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3) 
     sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
-    magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
-    return magnitude
+    texture_map = np.sqrt(sobel_x**2 + sobel_y**2)
 
-#trova zone molto chiare o molto scure
-def compute_bright_dark_areas(image):
+    max_texture = np.max(texture_map)
+    mask[texture_map >= (threshold * max_texture)] = 255
+
+    return mask
+
+#trova zone molto scure
+def compute_dark_areas(image):
+    mask = np.zeros_like(image)
     dark_factor=0.6 #diminuisci per più restrittivo su scuro
-    bright_factor=1.4 #auemnta per più restrittivo su chiaro
+
     threshold = np.mean(image)
     dark_threshold=threshold*dark_factor
-    bright_threshold=threshold*bright_factor
     dark_areas = np.argwhere(image < dark_threshold)
+    mask[tuple(dark_areas.T)] = 255
+    return mask
+
+#trova zone molto chiare
+def compute_bright_areas(image):
+    mask = np.zeros_like(image)
+    bright_factor=1.4 #auemnta per più restrittivo su chiaro
+    threshold = np.mean(image)
+
+    bright_threshold=threshold*bright_factor
     bright_areas = np.argwhere(image >= bright_threshold)
-    return dark_areas, bright_areas
+    mask[tuple(bright_areas.T)] = 255
+
+    return mask
 
 # Funzione principale di attacco
 def attacks(image, attack_name, param_array):
@@ -106,27 +129,27 @@ def attacks(image, attack_name, param_array):
     # perform the attacks in the input
     for attack, params in zip(attack_name, param_array):
         if attack == 'awgn':
-            std, seed, option = params
+            std, seed, option = params + [0] * (3 - len(params))
             attacked_image = awgn(attacked_image, std, seed, option)
         
         elif attack == 'blur':
-            sigma, option = params
+            sigma, option = params + [0] * (3 - len(params))
             attacked_image = blur(attacked_image, sigma, option)
         
         elif attack == 'sharpening':
-            sigma, alpha, option = params
+            sigma, alpha, option = params + [0] * (3 - len(params))
             attacked_image = sharpening(attacked_image, sigma, alpha, option)
         
         elif attack == 'median':
-            kernel_size, option = params
+            kernel_size, option = params + [0] * (3 - len(params))
             attacked_image = median(attacked_image, kernel_size, option)
         
         elif attack == 'resize':
-            scale, option = params
+            scale, option = params + [0] * (3 - len(params))
             attacked_image = resizing(attacked_image, scale, option)
         
         elif attack == 'jpeg':
-            QF, option = params
+            QF, option = params + [0] * (3 - len(params))
             attacked_image = jpeg_compression(attacked_image, QF, option)
     
     return attacked_image
