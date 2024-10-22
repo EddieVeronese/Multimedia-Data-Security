@@ -69,6 +69,9 @@ def apply_mask(img, attacked, option):
     elif option == 3: #Mask in bright areas
         dark_areas, bright_areas = compute_bright_dark_areas(img)
         mask[tuple(bright_areas.T)] = 255
+    elif option == 4: #Mask on the dark areas
+        dark_areas, bright_areas = compute_bright_dark_areas(img)
+        mask[tuple(dark_areas.T)] = 255
 
     return np.where(mask, attacked, img)
 
