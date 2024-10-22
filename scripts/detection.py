@@ -6,32 +6,9 @@ import matplotlib.pyplot as plt
 import cv2
 from scipy.signal import convolve2d
 from math import sqrt
+from scipy.ndimage import gaussian_gradient_magnitude
 
-#trova zone con texture
-def compute_texture_map(image):
-    sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3) 
-    sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
-    magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
-    return magnitude
-
-#trova zone molto chiare o molto scure
-def compute_bright_dark_areas(image):
-    dark_factor=0.6 #diminuisci per più restrittivo su scuro
-    bright_factor=1.4 #auemnta per più restrittivo su chiaro
-    threshold = np.mean(image)
-    dark_threshold=threshold*dark_factor
-    bright_threshold=threshold*bright_factor
-    dark_areas = np.argwhere(image < dark_threshold)
-    bright_areas = np.argwhere(image >= bright_threshold)
-    return dark_areas, bright_areas
-
-#trova contorni
-def compute_contours(image):
-    """ Calcola i contorni dell'immagine utilizzando il filtro di Canny. """
-    edges = cv2.Canny(image, 200, 600)  #aumenta valori per più restrittivo -> secondo deve essere 3x il primo
-    return np.argwhere(edges > 0) 
-
-def similarity(X,X_star):
+def similaritys(X,X_star):
     #Computes the similarity measure between the original and the new watermarks.
     s = np.sum(np.multiply(X, X_star)) / (np.sqrt(np.sum(np.multiply(X, X))) * np.sqrt(np.sum(np.multiply(X_star, X_star))))
     return s
@@ -50,80 +27,167 @@ def wpsnr(img1, img2):
 
 
 
-def extract_watermark(original_image, test_image):
-    # DWT dell'immagine originale
+import cv2
+import numpy as np
+import pywt
+from scipy.spatial.distance import cosine
+
+def get_sorted_locations(band):
+    """
+    Restituisce le posizioni ordinate dei coefficienti della banda in ordine decrescente di magnitudine.
+    """
+    abs_band = abs(band)
+    locations = np.argsort(-abs_band, axis=None)  # Ordinamento decrescente
+    rows = band.shape[0]
+    sorted_locations = [(val // rows, val % rows) for val in locations]  # Converti in coordinate 2D
+    return sorted_locations
+
+def extract_watermark(original_image, watermarked_image):
+    """
+    Rileva il watermark in un'immagine usando la DWT su più livelli e una maschera percettiva.
+    Combina i watermark estratti da ciascun livello calcolando la media.
+    """
+    mark_size=1024
     levels=2
-    alpha=0.2
-    v='multiplicative'
-    texture_threshold=0.3
-
-    coeffs2 = pywt.dwt2(original_image, 'haar')
-    LL, (LH, HL, HH) = coeffs2
-
-    # Calcolo delle aree significative
-    texture_map = compute_texture_map(original_image)
-    dark_areas, bright_areas = compute_bright_dark_areas(original_image)
-    contour_areas = compute_contours(original_image)
-    max_texture = np.max(texture_map)
-    texture_mask = np.zeros_like(original_image)
-    texture_mask[texture_map >= (texture_threshold * max_texture)] = 255  # Soglia texture
-    texture_areas = np.argwhere(texture_mask == 255)
-    significant_areas = set(map(tuple, np.vstack((bright_areas, dark_areas, contour_areas, texture_areas))))
-
-    # DWT dell'immagine di test
-    test_coeffs2 = pywt.dwt2(test_image, 'haar')
-    LL_test, (LH_test, HL_test, HH_test) = test_coeffs2
-
-    # Estrarre watermark confrontando LH dell'immagine originale e quella di test
-    extracted_mark = []
+    alpha=0.5
     
+    # Contenitore per i watermark estratti da ogni livello
+    watermark_levels = []
+    
+    # Applica DWT all'immagine originale e all'immagine watermarked per ogni livello
+    coeffs_original = pywt.dwt2(original_image, 'haar')
+    LL_or, (LH_or, HL_or, HH_or) = coeffs_original
+
+    coeffs_watermarked = pywt.dwt2(watermarked_image, 'haar')
+    LL_w, (LH_w, HL_w, HH_w) = coeffs_watermarked
+
     for level in range(levels):
-        sign_LH_test = np.sign(LH_test)
-        abs_LH_test = abs(LH_test)
-        locations_LH_test = np.argsort(-abs_LH_test, axis=None)
-        rows_LH_test = LH_test.shape[0]
-        locations_LH_test = [(val // rows_LH_test, val % rows_LH_test) for val in locations_LH_test]
+        ##print(f"Detection at level {level + 1}")
+
+        # Calcola la maschera percettiva per il livello attuale
+        mask = calculate_perceptual_mask(LL_or, LH_or, HL_or, HH_or)
+
+        # Ottieni le posizioni ordinate delle bande
+        locations_LH = get_sorted_locations(LH_or)
+        locations_HL = get_sorted_locations(HL_or)
+        locations_HH = get_sorted_locations(HH_or)
+
+        # Estrai il watermark da ciascuna banda (LH, HL, HH)
+        w_ex_LH = np.zeros(mark_size, dtype=np.float64)
+        w_ex_HL = np.zeros(mark_size, dtype=np.float64)
+        w_ex_HH = np.zeros(mark_size, dtype=np.float64)
+
+        # Estrazione da LH
+        for idx, loc in enumerate(locations_LH[1:mark_size+1]):
+            #w_ex_LH[idx] = (LH_w[loc] - LH_or[loc]) / (alpha * mask[loc]*LH_or[loc])
+            w_ex_LH[idx] = (LH_w[loc] - LH_or[loc]) / (alpha *LH_or[loc])
         
-        for loc in locations_LH_test[1:]:
-            if tuple(loc) in significant_areas:
-                if v == 'additive':
-                    extracted_val = (LH_test[loc] - LH[loc]) / alpha
-                elif v == 'multiplicative':
-                    extracted_val = (LH_test[loc] / LH[loc] - 1) / alpha
-                extracted_mark.append(extracted_val)
+        # Estrazione da HL
+        for idx, loc in enumerate(locations_HL[1:mark_size+1]):
+            #w_ex_HL[idx] = (HL_w[loc] - HL_or[loc]) / (alpha * mask[loc]*HL_or[loc])
+            w_ex_HL[idx] = (HL_w[loc] - HL_or[loc]) / (alpha *HL_or[loc])
 
-        # Aggiorna DWT per livello successivo
+        # Estrazione da HH
+        for idx, loc in enumerate(locations_HH[1:mark_size+1]):
+            #w_ex_HH[idx] = (HH_w[loc] - HH_or[loc]) / (alpha * mask[loc]*HH_or[loc])
+            w_ex_HH[idx] = (HH_w[loc] - HH_or[loc]) / (alpha*HH_or[loc])
+
+        # Combina i watermark estratti da LH, HL, e HH
+        w_ex_level = (w_ex_LH + w_ex_HL + w_ex_HH) / 3
+
+        # Aggiungi il watermark estratto al livello corrente alla lista dei watermark
+        watermark_levels.append(w_ex_level)
+
+        # Passa al livello successivo della decomposizione
         if level < levels - 1:
-            LL, (LH, HL, HH) = pywt.dwt2(LL, 'haar')
-            LL_test, (LH_test, HL_test, HH_test) = pywt.dwt2(LL_test, 'haar')
+            LL_or, (LH_or, HL_or, HH_or) = pywt.dwt2(LL_or, 'haar')
+            LL_w, (LH_w, HL_w, HH_w) = pywt.dwt2(LL_w, 'haar')
 
-    extracted_mark = np.round(extracted_mark).astype(int)
-    return extracted_mark
+    # Calcola la media dei watermark estratti da tutti i livelli
+    #final_watermark = sum(watermark_levels) / len(watermark_levels)
+
+    final_watermark=watermark_levels
+    return final_watermark
 
 
+def detection(original, watermarked, attacked):
 
-def detection(original_image, watermarked_image, attacked_image):  
-
-    # estraggo watermark da watermarked_image
-    w_extracted = extract_watermark(original_image, watermarked_image)
     
-    # estraggo watermark da attacked_image
-    w_attacked = extract_watermark(original_image, attacked_image)
+    # Extract watermarks from both the watermarked reference and the attacked image
+    watermark_originals = extract_watermark(original, watermarked)
+    watermark_attackeds = extract_watermark(original, attacked)
     
-    # calcolo similarità
-    sim = similarity(w_extracted, w_attacked)
+    # Initialize an empty list to store similarity scores
+    similarities = []
     
-    # calcolo WPSNR tra watermarked e attacked
-    wpsnr_value = wpsnr(watermarked_image, attacked_image)
+    # Compute similarity for each level and store the results
+    for watermark_original, watermark_attacked in zip(watermark_originals, watermark_attackeds):
+        similarity = similaritys(watermark_original, watermark_attacked)
+        similarities.append(similarity)
     
-    Tau = 0.75  # da ROC
+    # Select the best similarity score
+    best_similarity = max(similarities)
+    
+    # Compute WPSNR value
+    wpsnr_value = wpsnr(watermarked, attacked)
+    
+    # Define threshold for determining if the watermark is detected
+    threshold_tau = 0.7
+    
+    # Determine if the watermark is considered present
+    watermark_detected = 1 if best_similarity >= threshold_tau else 0
+    
+    return watermark_detected, wpsnr_value
 
-    # controllo se watermark presente
-    if sim >= Tau:
-        output1 = 1  
-    else:
-        output1 = 0 
 
-    output2 = wpsnr_value
+def calculate_perceptual_mask(LL, LH, HL, HH):
+    """
+    Calcola la maschera percettiva tenendo conto della luminanza, texture e sensibilità ai bordi.
+    """
+    band_sensitivity = calculate_band_sensitivity(LH, HL, HH)
+    luminance_sensitivity = calculate_luminance_sensitivity(LL)
+    texture_sensitivity = calculate_texture_sensitivity(LH, HL, HH)
+
+    # Combina le sensibilità per ottenere la maschera totale (Formula 9)
+    mask = band_sensitivity * luminance_sensitivity * texture_sensitivity
+    mask = mask / np.max(mask)  # Normalizza la maschera tra 0 e 1
+
+    return mask
+
+def calculate_band_sensitivity(LH, HL, HH):
+    """
+    Calcola la sensibilità alla banda in base alla frequenza e orientamento.
+    """
+    band_sensitivity = np.ones_like(LH)
     
-    return output1, output2
+    # Assegna sensibilità diversa per bande di diversa frequenza
+    band_sensitivity[LH > 0] *= 0.8  # Orientamento orizzontale
+    band_sensitivity[HL > 0] *= 0.7  # Orientamento verticale
+    band_sensitivity[HH > 0] *= 0.6  # Orientamento diagonale
+
+    return band_sensitivity
+
+def calculate_luminance_sensitivity(LL):
+    """
+    Calcola la sensibilità alla luminanza basata sulla sottobanda LL (bassa frequenza).
+    """
+    luminance_sensitivity = np.ones_like(LL)
+    luminance_sensitivity[LL > 128] = 0.5  # Aree molto luminose
+    luminance_sensitivity[LL < 50] = 0.5   # Aree molto scure
+
+    return luminance_sensitivity
+
+def calculate_texture_sensitivity(LH, HL, HH):
+    """
+    Calcola la sensibilità alla texture basata sui coefficienti delle bande di dettaglio.
+    """
+    # Somma i valori assoluti dei coefficienti per catturare la forza della texture
+    texture_map = np.abs(LH) + np.abs(HL) + np.abs(HH)
+    
+    # Aggiungi sensibilità ai bordi (gradiente locale)
+    edge_sensitivity = 1 / (1 + gaussian_gradient_magnitude(texture_map, sigma=1))
+    
+    texture_sensitivity = texture_map * edge_sensitivity
+    texture_sensitivity = texture_sensitivity / np.max(texture_sensitivity)  # Normalizza
+
+    return texture_sensitivity
