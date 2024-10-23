@@ -10,7 +10,7 @@ def awgn(img, std, seed, option = 0):
     mean = 0.0
     np.random.seed(seed)
     attacked = img + np.random.normal(mean, std, img.shape)
-    attacked = np.clip(attacked, 0, 255)
+    attacked = np.clip(attacked, 0, 255).astype(np.uint8)
     attacked = apply_mask(img, attacked, option)
     return attacked
 
@@ -20,8 +20,11 @@ def blur(img, sigma, option = 0):
     return attacked
 
 def sharpening(img, sigma, alpha, option = 0):
+    img = img.astype(np.float32)
     filter_blurred_f = gaussian_filter(img, sigma)
     attacked = img + alpha * (img - filter_blurred_f)
+    attacked = np.clip(attacked, 0, 255).astype(np.uint8)
+
     attacked = apply_mask(img, attacked, option)
     return attacked
 
@@ -52,13 +55,12 @@ def jpeg_compression(img, QF, option):
 def apply_mask(img, attacked, option):
 
     mask = np.zeros_like(img)
-    th1, th2 = 20, 60 # Parameters for the canny detection
 
     if option == 0: #Apply filter to the entire image
         return attacked
     elif option == 1: #Mask of the border
         mask = compute_edges(img)
-    
+        print(np.count_nonzero(mask == 255))
     elif option == 2:   #Mask the textured areas
         mask = compute_texture_map(img)
 
@@ -74,7 +76,7 @@ def apply_mask(img, attacked, option):
 #Trova i contorni dell'immagine
 def compute_edges(image):
     mask = np.zeros_like(image)
-    th1, th2 = 20, 60 # Parameters for the canny detection
+    th1, th2 = 200, 400 # Parameters for the canny detection
 
     img_scaled = np.uint8(image * 255)
     return cv2.Canny(img_scaled, th1, th2)

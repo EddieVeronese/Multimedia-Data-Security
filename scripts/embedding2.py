@@ -7,7 +7,7 @@ def embedding2(image_path, mark):
 
     #definizione parametri
     levels = 2
-    alpha = 0.5
+    alpha = 1
 
     #leggo immagine
     image = cv2.imread(image_path, 0)  

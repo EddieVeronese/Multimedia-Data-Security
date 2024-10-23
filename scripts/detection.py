@@ -49,7 +49,7 @@ def extract_watermark(original_image, watermarked_image):
     """
     mark_size=1024
     levels=2
-    alpha=0.5
+    alpha=1
     
     # Contenitore per i watermark estratti da ogni livello
     watermark_levels = []

@@ -23,7 +23,7 @@ def save_image_temp(image, image_id, folder="temp_images"):
     cv2.imwrite(temp_filename, image)
     return temp_filename
 
-def load_images_from_folder(folder_path, file_format="bmp", num_images=100):
+def load_images_from_folder(folder_path, file_format="bmp", num_images=50):
     """
     Carica un insieme di immagini dalla cartella specificata e restituisce una lista di immagini.
     """
@@ -48,32 +48,38 @@ def random_attack(watermarked_image):
     Seleziona casualmente un attacco e lo applica all'immagine.
     """
     attack_number = random.randint(1, 7)  # Genera un numero casuale tra 1 e 6
+
     
     # Switch per selezionare l'attacco in base al numero casuale
     if attack_number == 1:
-        print("Applico blur")
-        attacked_image = attacks(watermarked_image, 'blur', 1)
+        print(f"Applico blur")
+        sigma = random.choice([0.2, 0.5, 0.7, 1, 1.2])
+        attacked_image = attacks(watermarked_image, 'blur', sigma)
         
     elif attack_number == 2:
-        print("Applico AWGN")
-        attacked_image = attacks(watermarked_image, 'awgn', [5, 42])
+        print(f"Applico AWGN")
+        std = random.randint(5,30)
+        attacked_image = attacks(watermarked_image, 'awgn',[std, 42])
         
     elif attack_number == 3:
-        print("Applico sharpening")
-        attacked_image = attacks(watermarked_image, 'sharpening', [0.3, 0.5])
-        
+        print(f"Applico sharpening")
+        sigma = random.randint(5, 25)
+        alpha = random.randint(5, 25)
+        attacked_image = attacks(watermarked_image, 'sharpening', [sigma/10, alpha/10])
+        #attacked_image = watermarked_image
     elif attack_number == 4:
-        print("Applico median")
+        print(f"Applico median")
         attacked_image = attacks(watermarked_image, 'median', 3)
-        
+        #attacked_image = watermarked_image
     elif attack_number == 5:
-        print("Applico resize")
-
-        attacked_image = attacks(watermarked_image, 'resize', 0.95)
+        print(f"Applico resize")
+        scale = random.choice([0.5, 0.75, 0.875, 0.9375, 1])
+        attacked_image = attacks(watermarked_image, 'resize', scale)
         
     elif attack_number == 6:
-        print("Applico JPEG compression")
-        attacked_image = attacks(watermarked_image, 'jpeg', 20)
+        print(f"Applico JPEG compression")
+        compression_rate = random.randint(50, 100)
+        attacked_image = attacks(watermarked_image, 'jpeg', compression_rate)
     
     elif attack_number == 7:
         print("Applico no attack")
@@ -100,7 +106,7 @@ def estimate_threshold(images, original_watermark):
     mark_size=1024
     scores = []
     labels = []
-    num_repeats=20
+    num_repeats=10
     level=-1
     # Loop sulle immagini
     for image_id, image in enumerate(images):
